@@ -8,7 +8,7 @@ React 18, Vite, TypeScript, React Router, Tailwind CSS, Axios, React Hook Form, 
 2. Extract this project.
 3. Run `npm install`.
 4. Run `npm run dev`.
-5. Open the local URL printed by Vite.
+5. Open the local URL
 
 ## Demo login
 All demo accounts use password `demo123`:
