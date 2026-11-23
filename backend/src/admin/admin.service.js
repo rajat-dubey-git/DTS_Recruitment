@@ -1,7 +1,21 @@
 import { pool } from '../config/db.js'
 
-const hiddenColumns = new Set(['password_hash'])
+const hiddenColumns = new Set([
+  'password_hash',
+  'token_hash',
+  'refresh_token_hash',
+  'old_values',
+  'new_values',
+])
 const immutableColumns = new Set(['created_at', 'updated_at', 'last_login_at'])
+const readOnlyTables = new Set([
+  'application_status_history',
+  'audit_logs',
+  'notifications',
+  'password_reset_tokens',
+  'user_invitations',
+  'user_sessions',
+])
 const searchableTypes = new Set([
   'char',
   'varchar',
@@ -68,6 +82,7 @@ async function loadMetadata() {
       tables.set(column.tableName, {
         name: column.tableName,
         slug: column.tableName.replace(/_/g, '-'),
+        readOnly: readOnlyTables.has(column.tableName),
         columns: [],
         primaryKey: [],
       })
@@ -150,6 +165,32 @@ export function missingTable() {
   return error
 }
 
+function ensureWritable(table) {
+  if (!table.readOnly) return
+  const error = new Error('This table is managed by application workflows and is read-only here.')
+  error.statusCode = 403
+  throw error
+}
+
+async function ensureUserCanBeActive(table, values, keys = null, creating = false) {
+  if (table.name !== 'users') return
+  const statusColumn = table.columns.find((column) => column.name === 'status')
+  const status = values?.status ?? (creating ? statusColumn?.defaultValue : undefined)
+  if (status !== 'ACTIVE') return
+
+  if (creating) {
+    throw invalidInput('New users must be invited before their status can be ACTIVE.')
+  }
+
+  const [rows] = await pool.execute(
+    'SELECT password_hash IS NOT NULL AS hasPassword FROM users WHERE user_id = ? LIMIT 1',
+    [keys?.user_id],
+  )
+  if (!rows[0] || !rows[0].hasPassword) {
+    throw invalidInput('A user needs a password set through a secure flow before activation.')
+  }
+}
+
 export function validateRecordKeys(table, keys) {
   if (!keys || typeof keys !== 'object' || Array.isArray(keys)) {
     throw invalidInput('Primary key values are required.')
@@ -190,8 +231,15 @@ export function validateRecordValues(table, values, { creating = false } = {}) {
     if (value === null && !column.nullable) {
       throw invalidInput(`Field "${name}" cannot be null.`)
     }
-    if (value !== null && column.enumValues.length > 0 && !column.enumValues.includes(String(value))) {
+    if (value !== null && column.dataType === 'enum' && !column.enumValues.includes(String(value))) {
       throw invalidInput(`Field "${name}" must be one of: ${column.enumValues.join(', ')}.`)
+    }
+    if (
+      value !== null &&
+      column.dataType === 'set' &&
+      String(value).split(',').some((option) => !column.enumValues.includes(option))
+    ) {
+      throw invalidInput(`Field "${name}" contains an unsupported option.`)
     }
     if (
       value !== null &&
@@ -258,17 +306,20 @@ export async function listRecords(table, { limit, offset, search, sort, directio
     whereValues.push(...searchable.map(() => `%${search}%`))
   }
 
-  const orderColumn = sort && columns.includes(sort)
-    ? sort
-    : table.primaryKey[0]
-  if (!orderColumn) throw invalidInput('This table does not have a supported primary key.')
+  const orderColumns = sort && columns.includes(sort)
+    ? [sort, ...table.primaryKey.filter((key) => key !== sort)]
+    : table.primaryKey
+  if (orderColumns.length === 0) throw invalidInput('This table does not have a supported primary key.')
 
   const orderDirection = direction === 'desc' ? 'DESC' : 'ASC'
   const tableName = quoteIdentifier(table.name)
   const selection = columns.map(quoteIdentifier).join(', ')
+  const orderSql = orderColumns
+    .map((column) => `${quoteIdentifier(column)} ${orderDirection}`)
+    .join(', ')
   const [rows] = await pool.execute(
     `SELECT ${selection} FROM ${tableName}${whereSql}
-     ORDER BY ${quoteIdentifier(orderColumn)} ${orderDirection}
+     ORDER BY ${orderSql}
      LIMIT ? OFFSET ?`,
     [...whereValues, limit, offset],
   )
@@ -281,6 +332,8 @@ export async function listRecords(table, { limit, offset, search, sort, directio
 }
 
 export async function createRecord(table, values) {
+  ensureWritable(table)
+  await ensureUserCanBeActive(table, values, null, true)
   const entries = validateRecordValues(table, values, { creating: true })
   for (const key of table.primaryKey) {
     const column = table.columns.find((item) => item.name === key)
@@ -313,6 +366,8 @@ export async function createRecord(table, values) {
 }
 
 export async function updateRecord(table, keys, values) {
+  ensureWritable(table)
+  await ensureUserCanBeActive(table, values, keys)
   const whereSql = validateRecordKeys(table, keys)
   const entries = validateRecordValues(table, values)
   const setSql = entries.map(([name]) => `${quoteIdentifier(name)} = ?`).join(', ')
@@ -325,6 +380,7 @@ export async function updateRecord(table, keys, values) {
 }
 
 export async function deleteRecord(table, keys) {
+  ensureWritable(table)
   const whereSql = validateRecordKeys(table, keys)
   const [result] = await pool.execute(
     `DELETE FROM ${quoteIdentifier(table.name)} WHERE ${whereSql}`,

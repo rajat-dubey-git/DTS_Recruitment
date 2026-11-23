@@ -25,4 +25,8 @@ After login, an `ADMIN` can browse all base tables at `/app/admin`. The database
 - `PUT /api/admin/tables/:table/records` accepts `{ "keys": { ...primary-key fields }, "values": { ...changed fields } }`.
 - `DELETE /api/admin/tables/:table/records` accepts `{ "keys": { ...primary-key fields } }`.
 
-Table names and columns are resolved from the configured database schema, and all values are parameterized. `password_hash` is excluded from reads and writes. Foreign-key and unique-constraint errors are returned as actionable client errors. The current schema already contains sample records; do not rerun its destructive database-reset statement or insert a second seed set.
+Table names and columns are resolved from the configured database schema, and all values are parameterized. Password and refresh-token hashes are excluded from reads and writes. Authentication, audit, and status-history tables remain read-only through this generic interface. A new user must be invited before being marked active. Foreign-key and unique-constraint errors are returned as actionable client errors.
+
+The configured database already contains sample records in all 36 current application tables; do not rerun its destructive database-reset statement or insert a second seed set. A separate additive migration file in the workspace has not been applied; review and back up the database before deciding whether to apply it.
+
+Existing user rows with `password_hash IS NULL` cannot sign in even when their status is `ACTIVE`. The local admin seed adds a hash only for the configured admin; other accounts need an explicit password invitation/reset flow.

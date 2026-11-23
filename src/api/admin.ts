@@ -19,6 +19,7 @@ export type AdminColumn = {
 export type AdminTable = {
   name: string
   slug: string
+  readOnly: boolean
   columns: AdminColumn[]
   primaryKey: string[]
   searchableColumns: string[]

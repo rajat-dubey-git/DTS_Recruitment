@@ -358,7 +358,10 @@ export default function DatabaseTablePage() {
           {tables.map((table) => (
             <Link className="panel database-table-card" key={table.name} to={`/app/admin/${table.slug}`}>
               <strong>{table.name.replace(/_/g, ' ')}</strong>
-              <span>{table.rowCount} records · {table.columns.length} fields</span>
+              <span>
+                {table.rowCount} records · {table.columns.length} fields
+                {table.readOnly ? ' · read only' : ''}
+              </span>
             </Link>
           ))}
         </div>
@@ -391,12 +394,17 @@ export default function DatabaseTablePage() {
           <h1>{selectedTable.name.replace(/_/g, ' ')}</h1>
           <p>{total} records in the database table.</p>
         </div>
-        <button className="btn btn-primary" type="button" onClick={openCreate}>
+        <button className="btn btn-primary" type="button" onClick={openCreate} disabled={selectedTable.readOnly}>
           <Plus size={16} /> Add record
         </button>
       </div>
 
       <section className="panel customer-table-panel">
+        {selectedTable.readOnly && (
+          <div className="database-read-only" role="note">
+            This table is managed by application workflows. Records can be viewed but not changed here.
+          </div>
+        )}
         <div className="customer-toolbar">
           <div>
             <h3>Table records</h3>
@@ -432,7 +440,7 @@ export default function DatabaseTablePage() {
                 {selectedTable.columns.map((column) => (
                   <th key={column.name}>{column.name.replace(/_/g, ' ')}</th>
                 ))}
-                <th>ACTIONS</th>
+                {!selectedTable.readOnly && <th>ACTIONS</th>}
               </tr>
             </thead>
             <tbody>
@@ -443,33 +451,35 @@ export default function DatabaseTablePage() {
                     {selectedTable.columns.map((column) => (
                       <td key={column.name}>{displayValue(record[column.name])}</td>
                     ))}
-                    <td>
-                      <div className="customer-actions">
-                        <button
-                          type="button"
-                          aria-label={`Edit record ${rowIndex + offset + 1}`}
-                          title="Edit record"
-                          onClick={() => openEdit(record)}
-                        >
-                          <Pencil size={15} />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`Delete record ${rowIndex + offset + 1}`}
-                          title="Delete record"
-                          disabled={deletingKey === recordKey}
-                          onClick={() => void removeRecord(record)}
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </td>
+                    {!selectedTable.readOnly && (
+                      <td>
+                        <div className="customer-actions">
+                          <button
+                            type="button"
+                            aria-label={`Edit record ${rowIndex + offset + 1}`}
+                            title="Edit record"
+                            onClick={() => openEdit(record)}
+                          >
+                            <Pencil size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`Delete record ${rowIndex + offset + 1}`}
+                            title="Delete record"
+                            disabled={deletingKey === recordKey}
+                            onClick={() => void removeRecord(record)}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 )
               })}
               {!recordsLoading && records.length === 0 && (
                 <tr>
-                  <td colSpan={selectedTable.columns.length + 1}>
+                  <td colSpan={selectedTable.columns.length + (selectedTable.readOnly ? 0 : 1)}>
                     <div className="customer-empty">
                       <strong>No records found</strong>
                       <span>Change the search or add a new record.</span>
@@ -479,7 +489,7 @@ export default function DatabaseTablePage() {
               )}
               {recordsLoading && (
                 <tr>
-                  <td colSpan={selectedTable.columns.length + 1}>
+                  <td colSpan={selectedTable.columns.length + (selectedTable.readOnly ? 0 : 1)}>
                     <div className="customer-empty"><span>Loading records…</span></div>
                   </td>
                 </tr>
@@ -586,6 +596,28 @@ function DatabaseField({
           onChange={(event) => onChange(event.target.checked ? '1' : '0')}
         />
         {column.name.replace(/_/g, ' ')}
+      </label>
+    )
+  }
+
+  if (column.dataType === 'set' && column.enumValues.length > 0) {
+    return (
+      <label className="database-field">
+        <span>{column.name.replace(/_/g, ' ')}{required ? ' *' : ''}</span>
+        <select
+          multiple
+          required={required}
+          value={value ? value.split(',') : []}
+          onChange={(event) =>
+            onChange(
+              [...event.target.selectedOptions].map((option) => option.value).join(','),
+            )
+          }
+        >
+          {column.enumValues.map((option) => (
+            <option key={option} value={option}>{option.replace(/_/g, ' ')}</option>
+          ))}
+        </select>
       </label>
     )
   }
