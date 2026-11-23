@@ -10,6 +10,7 @@ import {
   CreditCard,
   Building2,
   GraduationCap,
+  Database,
 } from 'lucide-react'
 
 import type { LucideIcon } from 'lucide-react'
@@ -24,17 +25,33 @@ export type NavItem = {
 
 export const navByRole: Record<Role, NavItem[]> = {
   ADMIN: [
+    // { label: 'Overview', icon: LayoutDashboard, path: '/app/dashboard' },
+    // { label: 'Customers', icon: Building2, path: '/app/customers' },
+    // { label: 'Users', icon: Users, path: '/app/users' },
+    // { label: 'Job Profiles', icon: BriefcaseBusiness, path: '/app/job-profiles' },
+    // { label: 'Skills', icon: BriefcaseBusiness, path: '/app/skills' },
+    // { label: 'Service Types', icon: ClipboardList, path: '/app/service-types' },
+    // { label: 'Customer Contacts', icon: Users, path: '/app/customer-contacts' },
+    // { label: 'Agreements', icon: FileText, path: '/app/commercial/agreements' },
+    // { label: 'Rate Cards', icon: CreditCard, path: '/app/commercial/rate-cards' },
+    // { label: 'Service Orders', icon: ClipboardList, path: '/app/commercial/service-orders' },
+    // { label: 'Requirements', icon: ClipboardList, path: '/app/requirements' },
+    // { label: 'Candidates', icon: UserRound, path: '/app/candidates' },
+    // { label: 'Interviews', icon: CalendarDays, path: '/app/interviews' },
+    // { label: 'Invoices', icon: CreditCard, path: '/app/invoices' },
+    // { label: 'Reports', icon: FileText, path: '/app/reports' },
     { label: 'Overview', icon: LayoutDashboard, path: '/app/dashboard' },
-    { label: 'Customers', icon: Building2, path: '/app/customers' },
-    { label: 'Users', icon: Users, path: '/app/users' },
-    { label: 'Job Profiles', icon: BriefcaseBusiness, path: '/app/job-profiles' },
-    { label: 'Skills', icon: BriefcaseBusiness, path: '/app/skills' },
-    { label: 'Service Types', icon: ClipboardList, path: '/app/service-types' },
-    { label: 'Requirements', icon: ClipboardList, path: '/app/requirements' },
-    { label: 'Candidates', icon: UserRound, path: '/app/candidates' },
-    { label: 'Interviews', icon: CalendarDays, path: '/app/interviews' },
-    { label: 'Invoices', icon: CreditCard, path: '/app/invoices' },
-    { label: 'Reports', icon: FileText, path: '/app/reports' },
+    { label: 'Database Records', icon: Database, path: '/app/admin' },
+    { label: 'Customers', icon: Building2, path: '/app/admin/customers' },
+    { label: 'Customer Addresses', icon: Building2, path: '/app/admin/customer-addresses' },
+    { label: 'Customer Contacts', icon: Users, path: '/app/admin/customer-contacts' },
+    { label: 'Users', icon: Users, path: '/app/admin/users' },
+    { label: 'Job Profiles', icon: BriefcaseBusiness, path: '/app/admin/job-profiles' },
+    { label: 'Skills', icon: BriefcaseBusiness, path: '/app/admin/skills' },
+    { label: 'Service Types', icon: ClipboardList, path: '/app/admin/service-types' },
+    { label: 'Agreements', icon: FileText, path: '/app/admin/agreements' },
+    { label: 'Rate Cards', icon: CreditCard, path: '/app/admin/rate-cards' },
+    { label: 'Service Orders', icon: ClipboardList, path: '/app/admin/service-orders' },
   ],
 
   CUSTOMER: [

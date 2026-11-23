@@ -1,74 +1,90 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { Role } from '../data/navigation'
-
-export type User = {
-  userId: number
-  fullName: string
-  email: string
-  role: Role
-}
+import { authApi, isUnauthorized } from '../api/auth'
+import type { AuthUser } from '../api/auth'
 
 type AuthContextValue = {
-  user: User | null
+  user: AuthUser | null
+  isLoading: boolean
+  sessionError: string | null
   login: (email: string, password: string) => Promise<void>
-  logout: () => void
+  logout: () => Promise<void>
+  refreshSession: () => Promise<void>
 }
-
-const STORAGE_KEY = 'dts_demo_user'
-const DEMO_PASSWORD = 'demo123'
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
-const demoUsers: Record<string, User> = {
-  'admin@dts.com': { userId: 1, fullName: 'DTS Administrator', email: 'admin@dts.com', role: 'ADMIN' },
-  'customer@dts.com': { userId: 2, fullName: 'Customer User', email: 'customer@dts.com', role: 'CUSTOMER' },
-  'recruiter@dts.com': { userId: 3, fullName: 'Recruitment Executive', email: 'recruiter@dts.com', role: 'RECRUITER' },
-  'candidate@dts.com': { userId: 4, fullName: 'Candidate User', email: 'candidate@dts.com', role: 'CANDIDATE' },
-}
-
-function readStoredUser(): User | null {
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY)
-    return raw ? (JSON.parse(raw) as User) : null
-  } catch {
-    sessionStorage.removeItem(STORAGE_KEY)
-    return null
-  }
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(readStoredUser)
+  const [user, setUser] = useState<AuthUser | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [sessionError, setSessionError] = useState<string | null>(null)
+  const sessionRequestId = useRef(0)
 
-  const login = useCallback(async (email: string, password: string) => {
-    await new Promise((resolve) => setTimeout(resolve, 650))
+  const refreshSession = useCallback(async () => {
+    const requestId = ++sessionRequestId.current
+    setIsLoading(true)
+    setSessionError(null)
 
-    const match = demoUsers[email.trim().toLowerCase()]
-    if (!match || password !== DEMO_PASSWORD) {
-      throw new Error('Invalid email or password. Use one of the demo accounts shown below.')
+    try {
+      const currentUser = await authApi.me()
+      if (requestId === sessionRequestId.current) {
+        setUser(currentUser)
+      }
+    } catch (error) {
+      if (requestId !== sessionRequestId.current) return
+
+      setUser(null)
+      if (!isUnauthorized(error)) {
+        setSessionError(
+          error instanceof Error ? error.message : 'Unable to verify your session.',
+        )
+      }
+    } finally {
+      if (requestId === sessionRequestId.current) {
+        setIsLoading(false)
+      }
     }
-
-    setUser(match)
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(match))
   }, [])
 
-  const logout = useCallback(() => {
+  useEffect(() => {
+    void refreshSession()
+  }, [refreshSession])
+
+  const login = useCallback(async (email: string, password: string) => {
+    const requestId = ++sessionRequestId.current
+    try {
+      const signedInUser = await authApi.login(email, password)
+      if (requestId === sessionRequestId.current) {
+        setUser(signedInUser)
+        setSessionError(null)
+      }
+    } finally {
+      if (requestId === sessionRequestId.current) {
+        setIsLoading(false)
+      }
+    }
+  }, [])
+
+  const logout = useCallback(async () => {
+    await authApi.logout()
+    sessionRequestId.current += 1
     setUser(null)
-    sessionStorage.removeItem(STORAGE_KEY)
+    setSessionError(null)
+    setIsLoading(false)
   }, [])
 
   const value = useMemo<AuthContextValue>(
-    () => ({ user, login, logout }),
-    [user, login, logout]
+    () => ({ user, isLoading, sessionError, login, logout, refreshSession }),
+    [user, isLoading, sessionError, login, logout, refreshSession],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
 export function useAuth() {
-  const ctx = useContext(AuthContext)
-  if (!ctx) {
+  const contextValue = useContext(AuthContext)
+  if (!contextValue) {
     throw new Error('useAuth must be used inside AuthProvider')
   }
-  return ctx
+  return contextValue
 }

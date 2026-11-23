@@ -1,4 +1,5 @@
 
+import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 import {
@@ -17,6 +18,8 @@ export default function AppLayout() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [logoutError, setLogoutError] = useState('')
 
   if (!user) return null
 
@@ -32,7 +35,16 @@ export default function AppLayout() {
     <div className="app-shell">
 
       {/* Sidebar */}
-      <aside className="sidebar">
+      {mobileNavOpen && (
+        <button
+          className="sidebar-backdrop"
+          type="button"
+          aria-label="Close navigation"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      )}
+
+      <aside className={`sidebar ${mobileNavOpen ? 'mobile-open' : ''}`}>
 
         <div className="brand">
           <div className="brand-mark">D</div>
@@ -51,6 +63,7 @@ export default function AppLayout() {
               key={item.path}
               to={item.path}
               end
+              onClick={() => setMobileNavOpen(false)}
               className={({ isActive }) =>
                 `nav-item ${isActive ? 'active' : ''}`
               }
@@ -84,7 +97,13 @@ export default function AppLayout() {
 
         <header className="topbar">
 
-          <button className="mobile-menu" type="button">
+          <button
+            className="mobile-menu"
+            type="button"
+            aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
+            aria-expanded={mobileNavOpen}
+            onClick={() => setMobileNavOpen((open) => !open)}
+          >
             <Menu />
           </button>
 
@@ -127,9 +146,16 @@ export default function AppLayout() {
               className="icon-button"
               title="Sign out"
               type="button"
-              onClick={() => {
-                logout()
-                navigate('/login')
+              onClick={async () => {
+                setLogoutError('')
+                try {
+                  await logout()
+                  navigate('/login')
+                } catch (error) {
+                  setLogoutError(
+                    error instanceof Error ? error.message : 'Unable to sign out.',
+                  )
+                }
               }}
             >
               <LogOut size={17} />
@@ -137,6 +163,8 @@ export default function AppLayout() {
 
           </div>
         </header>
+
+        {logoutError && <div className="form-error" role="alert">{logoutError}</div>}
 
         <section className="page-content">
           <Outlet />

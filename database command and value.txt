@@ -1,0 +1,2323 @@
+/* =============================================================================
+   DTS Recruitment & Staffing Platform
+   ========================================================================== */
+
+SET NAMES utf8mb4;
+SET FOREIGN_KEY_CHECKS = 0;
+
+-- DROP DATABASE IF EXISTS dts_recruitment;
+CREATE DATABASE dts_recruitment
+  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+USE dts_recruitment;
+
+/* ============================ 1. USERS & CUSTOMERS ======================== */
+
+CREATE TABLE users (
+  user_id        INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  full_name      VARCHAR(100) NOT NULL,
+  email          VARCHAR(150) NOT NULL,
+  mobile         VARCHAR(15)  NULL,
+  password_hash  VARCHAR(255) NULL,
+  role           ENUM('ADMIN','RECRUITER','CANDIDATE','CUSTOMER') NOT NULL,
+  status         ENUM('INVITED','ACTIVE','INACTIVE','LOCKED') NOT NULL DEFAULT 'INVITED',
+  created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_login_at  DATETIME NULL,
+  updated_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT pk_users PRIMARY KEY (user_id),
+  CONSTRAINT uq_users_email UNIQUE (email),
+  KEY ix_users_role_status (role, status),
+  CONSTRAINT ck_users_email  CHECK (email LIKE '%_@_%._%'),
+  CONSTRAINT ck_users_mobile CHECK (mobile IS NULL OR REGEXP_LIKE(mobile, '^[+]?[0-9]{7,15}$'))
+) ENGINE=InnoDB;
+
+CREATE TABLE customers (
+  customer_id        INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  customer_code      VARCHAR(30)  NOT NULL,
+  company_name       VARCHAR(200) NOT NULL,
+  gstin              VARCHAR(15)  NULL,
+  pan                VARCHAR(10)  NULL,
+  industry           VARCHAR(100) NULL,
+  payment_terms_days SMALLINT UNSIGNED NOT NULL DEFAULT 30,
+  status             ENUM('PROSPECT','ACTIVE','INACTIVE') NOT NULL DEFAULT 'PROSPECT',
+  account_owner_id   INT UNSIGNED NULL,
+  created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT pk_customers PRIMARY KEY (customer_id),
+  CONSTRAINT uq_customers_code  UNIQUE (customer_code),
+  CONSTRAINT uq_customers_gstin UNIQUE (gstin),
+  KEY ix_customers_status (status),
+  CONSTRAINT fk_customers_owner FOREIGN KEY (account_owner_id) REFERENCES users (user_id),
+  CONSTRAINT ck_customers_terms CHECK (payment_terms_days <= 365),
+  CONSTRAINT ck_customers_gstin CHECK (gstin IS NULL OR REGEXP_LIKE(gstin, '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$', 'c')),
+  CONSTRAINT ck_customers_pan   CHECK (pan   IS NULL OR REGEXP_LIKE(pan,   '^[A-Z]{5}[0-9]{4}[A-Z]$', 'c')),
+  /* a GSTIN embeds the PAN at positions 3-12; keep the two consistent */
+  CONSTRAINT ck_customers_gstin_pan CHECK (gstin IS NULL OR pan IS NULL OR SUBSTRING(gstin, 3, 10) = pan)
+) ENGINE=InnoDB;
+
+CREATE TABLE customer_addresses (
+  address_id    INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  customer_id   INT UNSIGNED NOT NULL,
+  address_type  ENUM('REGISTERED','BILLING','SITE','OTHER') NOT NULL,
+  address_line  VARCHAR(255) NOT NULL,
+  city          VARCHAR(100) NOT NULL,
+  state         VARCHAR(100) NULL,
+  postal_code   VARCHAR(10)  NULL,
+  is_primary    TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  primary_marker TINYINT GENERATED ALWAYS AS (IF(is_primary = 1, 1, NULL)) VIRTUAL,
+  CONSTRAINT pk_customer_addresses PRIMARY KEY (address_id),
+  CONSTRAINT uq_customer_addresses_primary UNIQUE (customer_id, address_type, primary_marker),
+  CONSTRAINT fk_customer_addresses_customer FOREIGN KEY (customer_id) REFERENCES customers (customer_id),
+  CONSTRAINT ck_customer_addresses_primary CHECK (is_primary IN (0,1))
+) ENGINE=InnoDB;
+
+CREATE TABLE customer_contacts (
+  contact_id    INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  customer_id   INT UNSIGNED NOT NULL,
+  user_id       INT UNSIGNED NOT NULL,
+  designation   VARCHAR(100) NULL,
+  contact_type  ENUM('HIRING','BILLING','SIGNATORY','TECHNICAL','OTHER') NOT NULL DEFAULT 'HIRING',
+  is_primary    TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  status        ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+  primary_marker TINYINT GENERATED ALWAYS AS (IF(is_primary = 1, 1, NULL)) VIRTUAL,
+  CONSTRAINT pk_customer_contacts PRIMARY KEY (contact_id),
+  CONSTRAINT uq_customer_contacts_user UNIQUE (user_id),
+  CONSTRAINT uq_customer_contacts_primary UNIQUE (customer_id, primary_marker),
+  CONSTRAINT fk_customer_contacts_customer FOREIGN KEY (customer_id) REFERENCES customers (customer_id),
+  CONSTRAINT fk_customer_contacts_user     FOREIGN KEY (user_id)     REFERENCES users (user_id),
+  CONSTRAINT ck_customer_contacts_primary CHECK (is_primary IN (0,1))
+) ENGINE=InnoDB;
+
+/* ====================== 2. MASTER DATA (admin set-up) ===================== */
+
+CREATE TABLE skills (
+  skill_id       INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  skill_name     VARCHAR(100) NOT NULL,
+  skill_category VARCHAR(60)  NULL,
+  CONSTRAINT pk_skills PRIMARY KEY (skill_id),
+  CONSTRAINT uq_skills_name UNIQUE (skill_name)
+) ENGINE=InnoDB;
+
+CREATE TABLE service_types (
+  service_type_id  INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  service_code     VARCHAR(30)  NOT NULL,
+  service_name     VARCHAR(100) NOT NULL,
+  employment_model ENUM('DTS_PAYROLL','CUSTOMER_PAYROLL') NOT NULL,
+  CONSTRAINT pk_service_types PRIMARY KEY (service_type_id),
+  CONSTRAINT uq_service_types_code UNIQUE (service_code)
+) ENGINE=InnoDB;
+
+CREATE TABLE job_profiles (
+  job_profile_id        INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  profile_code          VARCHAR(30)  NOT NULL,
+  profile_name          VARCHAR(150) NOT NULL,
+  category              VARCHAR(100) NULL,
+  purpose               TEXT NOT NULL,
+  key_responsibilities  TEXT NOT NULL,
+  qualifications        TEXT NULL,
+  reporting_to          VARCHAR(150) NULL,
+  default_experience_min DECIMAL(4,1) NULL,
+  default_experience_max DECIMAL(4,1) NULL,
+  status                ENUM('DRAFT','ACTIVE','ARCHIVED') NOT NULL DEFAULT 'DRAFT',
+  created_by            INT UNSIGNED NULL,
+  created_at            DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT pk_job_profiles PRIMARY KEY (job_profile_id),
+  CONSTRAINT uq_job_profiles_code UNIQUE (profile_code),
+  KEY ix_job_profiles_status (status),
+  CONSTRAINT fk_job_profiles_created_by FOREIGN KEY (created_by) REFERENCES users (user_id),
+  CONSTRAINT ck_job_profiles_exp CHECK (default_experience_min IS NULL OR default_experience_max IS NULL
+                                        OR default_experience_max >= default_experience_min),
+  CONSTRAINT ck_job_profiles_exp_pos CHECK (default_experience_min IS NULL OR default_experience_min >= 0)
+) ENGINE=InnoDB;
+
+CREATE TABLE job_profile_skills (
+  job_profile_id       INT UNSIGNED NOT NULL,
+  skill_id             INT UNSIGNED NOT NULL,
+  is_mandatory         TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  min_experience_years DECIMAL(4,1) NULL,
+  CONSTRAINT pk_job_profile_skills PRIMARY KEY (job_profile_id, skill_id),
+  CONSTRAINT fk_job_profile_skills_profile FOREIGN KEY (job_profile_id) REFERENCES job_profiles (job_profile_id) ON DELETE CASCADE,
+  CONSTRAINT fk_job_profile_skills_skill   FOREIGN KEY (skill_id)       REFERENCES skills (skill_id),
+  CONSTRAINT ck_job_profile_skills_mand CHECK (is_mandatory IN (0,1)),
+  CONSTRAINT ck_job_profile_skills_exp  CHECK (min_experience_years IS NULL OR min_experience_years >= 0)
+) ENGINE=InnoDB;
+
+/* ================== 3. AGREEMENT, PRICING, SERVICE ORDER ================== */
+
+CREATE TABLE agreements (
+  agreement_id     INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  agreement_number VARCHAR(50)  NOT NULL,
+  customer_id      INT UNSIGNED NOT NULL,
+  title            VARCHAR(200) NOT NULL,
+  status           ENUM('DRAFT','PENDING_SIGNATURE','ACTIVE','EXPIRED','TERMINATED') NOT NULL DEFAULT 'DRAFT',
+  effective_date   DATE NULL,
+  expiry_date      DATE NULL,
+  signed_date      DATE NULL,
+  auto_renew       TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  document_path    VARCHAR(500) NULL,
+  created_by       INT UNSIGNED NULL,
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT pk_agreements PRIMARY KEY (agreement_id),
+  CONSTRAINT uq_agreements_number UNIQUE (agreement_number),
+  KEY ix_agreements_customer_status (customer_id, status),
+  CONSTRAINT fk_agreements_customer   FOREIGN KEY (customer_id) REFERENCES customers (customer_id),
+  CONSTRAINT fk_agreements_created_by FOREIGN KEY (created_by)  REFERENCES users (user_id),
+  CONSTRAINT ck_agreements_dates  CHECK (expiry_date IS NULL OR effective_date IS NULL OR expiry_date >= effective_date),
+  CONSTRAINT ck_agreements_active CHECK (status <> 'ACTIVE' OR (effective_date IS NOT NULL AND signed_date IS NOT NULL)),
+  CONSTRAINT ck_agreements_renew  CHECK (auto_renew IN (0,1))
+) ENGINE=InnoDB;
+
+CREATE TABLE rate_cards (
+  rate_card_id      INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  agreement_id      INT UNSIGNED NOT NULL,
+  service_type_id   INT UNSIGNED NOT NULL,
+  job_profile_id    INT UNSIGNED NOT NULL,
+  fee_type          ENUM('PERCENTAGE','FIXED_AMOUNT','SALARY_MONTHS') NOT NULL,
+  fee_basis         ENUM('MONTHLY_SALARY','ANNUAL_CTC','HOURLY','PER_PLACEMENT') NOT NULL,
+  fee_value         DECIMAL(12,2) NOT NULL,
+  billing_frequency ENUM('ONE_TIME','MONTHLY','QUARTERLY') NOT NULL,
+  replacement_days  SMALLINT UNSIGNED NULL,
+  effective_from    DATE NOT NULL,
+  effective_to      DATE NULL,
+  CONSTRAINT pk_rate_cards PRIMARY KEY (rate_card_id),
+  CONSTRAINT uq_rate_cards_key UNIQUE (agreement_id, service_type_id, job_profile_id, effective_from),
+  KEY ix_rate_cards_service (service_type_id),
+  KEY ix_rate_cards_profile (job_profile_id),
+  CONSTRAINT fk_rate_cards_agreement FOREIGN KEY (agreement_id)    REFERENCES agreements (agreement_id),
+  CONSTRAINT fk_rate_cards_service   FOREIGN KEY (service_type_id) REFERENCES service_types (service_type_id),
+  CONSTRAINT fk_rate_cards_profile   FOREIGN KEY (job_profile_id)  REFERENCES job_profiles (job_profile_id),
+  CONSTRAINT ck_rate_cards_value CHECK (fee_value >= 0 AND (fee_type <> 'PERCENTAGE' OR fee_value <= 100)),
+  CONSTRAINT ck_rate_cards_dates CHECK (effective_to IS NULL OR effective_to >= effective_from)
+) ENGINE=InnoDB;
+
+CREATE TABLE service_orders (
+  service_order_id   INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  order_number       VARCHAR(50)  NOT NULL,
+  agreement_id       INT UNSIGNED NOT NULL,
+  service_type_id    INT UNSIGNED NOT NULL,
+  customer_reference VARCHAR(100) NULL,
+  title              VARCHAR(200) NOT NULL,
+  scope_description  TEXT NULL,
+  start_date         DATE NULL,
+  end_date           DATE NULL,
+  status             ENUM('DRAFT','PENDING_APPROVAL','APPROVED','IN_PROGRESS','COMPLETED','CANCELLED') NOT NULL DEFAULT 'DRAFT',
+  approved_by        INT UNSIGNED NULL,
+  approved_at        DATETIME NULL,
+  created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT pk_service_orders PRIMARY KEY (service_order_id),
+  CONSTRAINT uq_service_orders_number UNIQUE (order_number),
+  KEY ix_service_orders_agreement (agreement_id, status),
+  KEY ix_service_orders_service (service_type_id),
+  CONSTRAINT fk_service_orders_agreement   FOREIGN KEY (agreement_id)    REFERENCES agreements (agreement_id),
+  CONSTRAINT fk_service_orders_service     FOREIGN KEY (service_type_id) REFERENCES service_types (service_type_id),
+  CONSTRAINT fk_service_orders_approved_by FOREIGN KEY (approved_by)     REFERENCES users (user_id),
+  CONSTRAINT ck_service_orders_dates    CHECK (end_date IS NULL OR start_date IS NULL OR end_date >= start_date),
+  CONSTRAINT ck_service_orders_approval CHECK ((approved_by IS NULL) = (approved_at IS NULL))
+) ENGINE=InnoDB;
+
+/* ========================= 4. JOB REQUIREMENTS ============================ */
+
+CREATE TABLE job_requirements (
+  requirement_id       INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  requirement_number   VARCHAR(50)  NOT NULL,
+  service_order_id     INT UNSIGNED NOT NULL,
+  job_profile_id       INT UNSIGNED NOT NULL,
+  raised_by_user_id    INT UNSIGNED NULL,
+  job_title            VARCHAR(150) NOT NULL,
+  job_description      TEXT NOT NULL,
+  headcount            SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+  work_mode            ENUM('ONSITE','REMOTE','HYBRID') NOT NULL,
+  work_location        VARCHAR(150) NULL,
+  experience_min_years DECIMAL(4,1) NULL,
+  experience_max_years DECIMAL(4,1) NULL,
+  salary_min           DECIMAL(12,2) NULL,
+  salary_max           DECIMAL(12,2) NULL,
+  employment_schedule  ENUM('FULL_TIME','PART_TIME') NOT NULL,
+  hours_per_week       DECIMAL(5,2) NULL,
+  target_join_date     DATE NULL,
+  status               ENUM('DRAFT','PENDING_APPROVAL','APPROVED','OPEN','ON_HOLD','FILLED','CLOSED','CANCELLED') NOT NULL DEFAULT 'DRAFT',
+  approved_by          INT UNSIGNED NULL,
+  approved_at          DATETIME NULL,
+  published_at         DATETIME NULL,
+  created_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT pk_job_requirements PRIMARY KEY (requirement_id),
+  CONSTRAINT uq_job_requirements_number UNIQUE (requirement_number),
+  KEY ix_job_requirements_order_status (service_order_id, status),
+  KEY ix_job_requirements_profile (job_profile_id),
+  KEY ix_job_requirements_status_pub (status, published_at),
+  CONSTRAINT fk_job_requirements_order    FOREIGN KEY (service_order_id)  REFERENCES service_orders (service_order_id),
+  CONSTRAINT fk_job_requirements_profile  FOREIGN KEY (job_profile_id)    REFERENCES job_profiles (job_profile_id),
+  CONSTRAINT fk_job_requirements_raised   FOREIGN KEY (raised_by_user_id) REFERENCES users (user_id),
+  CONSTRAINT fk_job_requirements_approved FOREIGN KEY (approved_by)       REFERENCES users (user_id),
+  CONSTRAINT ck_job_requirements_headcount CHECK (headcount > 0),
+  CONSTRAINT ck_job_requirements_exp    CHECK (experience_min_years IS NULL OR experience_max_years IS NULL OR experience_max_years >= experience_min_years),
+  CONSTRAINT ck_job_requirements_salary CHECK (salary_min IS NULL OR salary_max IS NULL OR salary_max >= salary_min),
+  CONSTRAINT ck_job_requirements_hours  CHECK (hours_per_week IS NULL OR (hours_per_week > 0 AND hours_per_week <= 168)),
+  CONSTRAINT ck_job_requirements_parttime CHECK (employment_schedule = 'FULL_TIME' OR hours_per_week IS NOT NULL),
+  CONSTRAINT ck_job_requirements_approval CHECK ((approved_by IS NULL) = (approved_at IS NULL))
+) ENGINE=InnoDB;
+
+CREATE TABLE requirement_assignments (
+  assignment_id   INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  requirement_id  INT UNSIGNED NOT NULL,
+  recruiter_id    INT UNSIGNED NOT NULL,
+  assignment_role ENUM('LEAD','SUPPORT') NOT NULL DEFAULT 'LEAD',
+  assigned_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  unassigned_at   DATETIME NULL,
+  active_marker   TINYINT GENERATED ALWAYS AS (IF(unassigned_at IS NULL, 1, NULL)) VIRTUAL,
+  CONSTRAINT pk_requirement_assignments PRIMARY KEY (assignment_id),
+  CONSTRAINT uq_requirement_assignments_active UNIQUE (requirement_id, recruiter_id, active_marker),
+  KEY ix_requirement_assignments_recruiter (recruiter_id),
+  CONSTRAINT fk_requirement_assignments_req FOREIGN KEY (requirement_id) REFERENCES job_requirements (requirement_id),
+  CONSTRAINT fk_requirement_assignments_rec FOREIGN KEY (recruiter_id)   REFERENCES users (user_id),
+  CONSTRAINT ck_requirement_assignments_dates CHECK (unassigned_at IS NULL OR unassigned_at >= assigned_at)
+) ENGINE=InnoDB;
+
+CREATE TABLE job_requirement_skills (
+  requirement_id       INT UNSIGNED NOT NULL,
+  skill_id             INT UNSIGNED NOT NULL,
+  is_mandatory         TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  min_experience_years DECIMAL(4,1) NULL,
+  CONSTRAINT pk_job_requirement_skills PRIMARY KEY (requirement_id, skill_id),
+  CONSTRAINT fk_job_requirement_skills_req   FOREIGN KEY (requirement_id) REFERENCES job_requirements (requirement_id) ON DELETE CASCADE,
+  CONSTRAINT fk_job_requirement_skills_skill FOREIGN KEY (skill_id)       REFERENCES skills (skill_id),
+  CONSTRAINT ck_job_requirement_skills_mand CHECK (is_mandatory IN (0,1)),
+  CONSTRAINT ck_job_requirement_skills_exp  CHECK (min_experience_years IS NULL OR min_experience_years >= 0)
+) ENGINE=InnoDB;
+
+/* ============================ 5. CANDIDATES =============================== */
+
+CREATE TABLE candidates (
+  candidate_id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  candidate_code         VARCHAR(30)  NOT NULL,
+  first_name             VARCHAR(60)  NOT NULL,
+  last_name              VARCHAR(60)  NULL,
+  email                  VARCHAR(150) NULL,
+  mobile                 VARCHAR(15)  NOT NULL,
+  date_of_birth          DATE NULL,
+  current_city           VARCHAR(100) NULL,
+  current_state          VARCHAR(100) NULL,
+  total_experience_years DECIMAL(4,1) NULL,
+  current_ctc            DECIMAL(12,2) NULL,
+  expected_ctc           DECIMAL(12,2) NULL,
+  notice_period_days     SMALLINT UNSIGNED NULL,
+  source                 ENUM('PORTAL','ADMIN_UPLOAD','REFERRAL','JOB_BOARD','OTHER') NOT NULL DEFAULT 'PORTAL',
+  profile_summary        TEXT NULL,
+  status                 ENUM('NEW','ACTIVE','PLACED','INACTIVE','BLACKLISTED') NOT NULL DEFAULT 'NEW',
+  created_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  created_by             INT UNSIGNED NULL,
+  user_id                INT UNSIGNED NULL,
+  CONSTRAINT pk_candidates PRIMARY KEY (candidate_id),
+  CONSTRAINT uq_candidates_code  UNIQUE (candidate_code),
+  CONSTRAINT uq_candidates_email UNIQUE (email),
+  CONSTRAINT uq_candidates_user  UNIQUE (user_id),
+  KEY ix_candidates_mobile (mobile),
+  KEY ix_candidates_status_city (status, current_city),
+  CONSTRAINT fk_candidates_created_by FOREIGN KEY (created_by) REFERENCES users (user_id),
+  CONSTRAINT fk_candidates_user       FOREIGN KEY (user_id)    REFERENCES users (user_id),
+  CONSTRAINT ck_candidates_mobile CHECK (REGEXP_LIKE(mobile, '^[+]?[0-9]{7,15}$')),
+  CONSTRAINT ck_candidates_email  CHECK (email IS NULL OR email LIKE '%_@_%._%'),
+  CONSTRAINT ck_candidates_exp    CHECK (total_experience_years IS NULL OR total_experience_years >= 0),
+  CONSTRAINT ck_candidates_ctc    CHECK ((current_ctc IS NULL OR current_ctc >= 0) AND (expected_ctc IS NULL OR expected_ctc >= 0))
+) ENGINE=InnoDB;
+
+CREATE TABLE candidate_documents (
+  document_id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  candidate_id        INT UNSIGNED NOT NULL,
+  document_type       ENUM('RESUME','ID_PROOF','EDUCATION_CERT','EXPERIENCE_LETTER','OTHER') NOT NULL,
+  file_name           VARCHAR(255) NOT NULL,
+  file_path           VARCHAR(500) NOT NULL,
+  is_current          TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  verification_status ENUM('PENDING','VERIFIED','REJECTED') NOT NULL DEFAULT 'PENDING',
+  verified_by         INT UNSIGNED NULL,
+  verified_at         DATETIME NULL,
+  uploaded_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  uploaded_by         INT UNSIGNED NULL,
+  current_resume_marker TINYINT GENERATED ALWAYS AS (IF(is_current = 1 AND document_type = 'RESUME', 1, NULL)) VIRTUAL,
+  CONSTRAINT pk_candidate_documents PRIMARY KEY (document_id),
+  CONSTRAINT uq_candidate_documents_resume UNIQUE (candidate_id, current_resume_marker),
+  KEY ix_candidate_documents_type (candidate_id, document_type),
+  CONSTRAINT fk_candidate_documents_candidate   FOREIGN KEY (candidate_id) REFERENCES candidates (candidate_id),
+  CONSTRAINT fk_candidate_documents_verified_by FOREIGN KEY (verified_by)  REFERENCES users (user_id),
+  CONSTRAINT fk_candidate_documents_uploaded_by FOREIGN KEY (uploaded_by)  REFERENCES users (user_id),
+  CONSTRAINT ck_candidate_documents_current  CHECK (is_current IN (0,1)),
+  CONSTRAINT ck_candidate_documents_verified CHECK ((verified_by IS NULL) = (verified_at IS NULL))
+) ENGINE=InnoDB;
+
+CREATE TABLE candidate_education (
+  education_id        INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  candidate_id        INT UNSIGNED NOT NULL,
+  qualification       VARCHAR(100) NOT NULL,
+  specialization      VARCHAR(100) NULL,
+  institution         VARCHAR(200) NULL,
+  passing_year        SMALLINT UNSIGNED NULL,
+  grade_or_percentage VARCHAR(30) NULL,
+  CONSTRAINT pk_candidate_education PRIMARY KEY (education_id),
+  KEY ix_candidate_education_candidate (candidate_id),
+  CONSTRAINT fk_candidate_education_candidate FOREIGN KEY (candidate_id) REFERENCES candidates (candidate_id) ON DELETE CASCADE,
+  CONSTRAINT ck_candidate_education_year CHECK (passing_year IS NULL OR passing_year BETWEEN 1950 AND 2100)
+) ENGINE=InnoDB;
+
+CREATE TABLE candidate_experience (
+  experience_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  candidate_id  INT UNSIGNED NOT NULL,
+  employer_name VARCHAR(200) NOT NULL,
+  designation   VARCHAR(120) NOT NULL,
+  start_date    DATE NULL,
+  end_date      DATE NULL,
+  is_current    TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  CONSTRAINT pk_candidate_experience PRIMARY KEY (experience_id),
+  KEY ix_candidate_experience_candidate (candidate_id),
+  CONSTRAINT fk_candidate_experience_candidate FOREIGN KEY (candidate_id) REFERENCES candidates (candidate_id) ON DELETE CASCADE,
+  CONSTRAINT ck_candidate_experience_dates   CHECK (end_date IS NULL OR start_date IS NULL OR end_date >= start_date),
+  CONSTRAINT ck_candidate_experience_current CHECK (is_current IN (0,1) AND (is_current = 0 OR end_date IS NULL))
+) ENGINE=InnoDB;
+
+CREATE TABLE candidate_skills (
+  candidate_id     INT UNSIGNED NOT NULL,
+  skill_id         INT UNSIGNED NOT NULL,
+  experience_years DECIMAL(4,1) NULL,
+  proficiency      ENUM('BEGINNER','INTERMEDIATE','ADVANCED','EXPERT') NULL,
+  CONSTRAINT pk_candidate_skills PRIMARY KEY (candidate_id, skill_id),
+  KEY ix_candidate_skills_skill (skill_id),
+  CONSTRAINT fk_candidate_skills_candidate FOREIGN KEY (candidate_id) REFERENCES candidates (candidate_id) ON DELETE CASCADE,
+  CONSTRAINT fk_candidate_skills_skill     FOREIGN KEY (skill_id)     REFERENCES skills (skill_id),
+  CONSTRAINT ck_candidate_skills_exp CHECK (experience_years IS NULL OR experience_years >= 0)
+) ENGINE=InnoDB;
+
+/* ================ 6. APPLICATION -> SCREENING -> SHORTLIST ================ */
+
+CREATE TABLE applications (
+  application_id     INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  application_number VARCHAR(50)  NOT NULL,
+  requirement_id     INT UNSIGNED NOT NULL,
+  candidate_id       INT UNSIGNED NOT NULL,
+  recruiter_id       INT UNSIGNED NULL,
+  status             ENUM('APPLIED','SCREENING','SHORTLISTED','INTERVIEW','SELECTED','REJECTED','WITHDRAWN') NOT NULL DEFAULT 'APPLIED',
+  source             ENUM('SELF_APPLIED','RECRUITER_ADDED','REFERRAL','JOB_BOARD') NOT NULL DEFAULT 'SELF_APPLIED',
+  applied_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  rejection_reason   VARCHAR(255) NULL,
+  CONSTRAINT pk_applications PRIMARY KEY (application_id),
+  CONSTRAINT uq_applications_number UNIQUE (application_number),
+  CONSTRAINT uq_applications_req_cand UNIQUE (requirement_id, candidate_id),
+  KEY ix_applications_candidate (candidate_id),
+  KEY ix_applications_recruiter (recruiter_id),
+  KEY ix_applications_req_status (requirement_id, status),
+  CONSTRAINT fk_applications_requirement FOREIGN KEY (requirement_id) REFERENCES job_requirements (requirement_id),
+  CONSTRAINT fk_applications_candidate   FOREIGN KEY (candidate_id)   REFERENCES candidates (candidate_id),
+  CONSTRAINT fk_applications_recruiter   FOREIGN KEY (recruiter_id)   REFERENCES users (user_id),
+  CONSTRAINT ck_applications_rejection CHECK (rejection_reason IS NULL OR status = 'REJECTED')
+) ENGINE=InnoDB;
+
+CREATE TABLE screenings (
+  screening_id   INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  application_id INT UNSIGNED NOT NULL,
+  screened_by    INT UNSIGNED NULL,
+  screened_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  result         ENUM('PASS','FAIL','HOLD') NOT NULL,
+  score          DECIMAL(5,2) NULL,
+  remarks        VARCHAR(500) NULL,
+  CONSTRAINT pk_screenings PRIMARY KEY (screening_id),
+  KEY ix_screenings_application (application_id),
+  KEY ix_screenings_screened_by (screened_by),
+  CONSTRAINT fk_screenings_application FOREIGN KEY (application_id) REFERENCES applications (application_id),
+  CONSTRAINT fk_screenings_screened_by FOREIGN KEY (screened_by)    REFERENCES users (user_id),
+  CONSTRAINT ck_screenings_score CHECK (score IS NULL OR score BETWEEN 0 AND 100)
+) ENGINE=InnoDB;
+
+CREATE TABLE shortlists (
+  shortlist_id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  application_id       INT UNSIGNED NOT NULL,
+  shortlisted_by       INT UNSIGNED NULL,
+  shortlisted_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  status               ENUM('SHORTLISTED','CUSTOMER_ACCEPTED','CUSTOMER_REJECTED','WITHDRAWN') NOT NULL DEFAULT 'SHORTLISTED',
+  customer_decision_by INT UNSIGNED NULL,
+  customer_decision_at DATETIME NULL,
+  CONSTRAINT pk_shortlists PRIMARY KEY (shortlist_id),
+  CONSTRAINT uq_shortlists_application UNIQUE (application_id),
+  KEY ix_shortlists_shortlisted_by (shortlisted_by),
+  KEY ix_shortlists_decision_by (customer_decision_by),
+  CONSTRAINT fk_shortlists_application    FOREIGN KEY (application_id)       REFERENCES applications (application_id),
+  CONSTRAINT fk_shortlists_shortlisted_by FOREIGN KEY (shortlisted_by)       REFERENCES users (user_id),
+  CONSTRAINT fk_shortlists_decision_by    FOREIGN KEY (customer_decision_by) REFERENCES customer_contacts (contact_id),
+  CONSTRAINT ck_shortlists_decision CHECK ((customer_decision_by IS NULL) = (customer_decision_at IS NULL))
+) ENGINE=InnoDB;
+
+/* ========================== 7. RESUME SHARING ============================= */
+
+CREATE TABLE resume_shares (
+  share_id               INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  application_id         INT UNSIGNED NOT NULL,
+  shared_with_contact_id INT UNSIGNED NOT NULL,
+  document_id            INT UNSIGNED NOT NULL,
+  shared_by              INT UNSIGNED NULL,
+  shared_at              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  access_expires_at      DATETIME NULL,
+  viewed_at              DATETIME NULL,
+  status                 ENUM('SHARED','VIEWED','EXPIRED','REVOKED') NOT NULL DEFAULT 'SHARED',
+  CONSTRAINT pk_resume_shares PRIMARY KEY (share_id),
+  CONSTRAINT uq_resume_shares_key UNIQUE (application_id, shared_with_contact_id, document_id),
+  KEY ix_resume_shares_contact (shared_with_contact_id),
+  KEY ix_resume_shares_document (document_id),
+  KEY ix_resume_shares_shared_by (shared_by),
+  CONSTRAINT fk_resume_shares_application FOREIGN KEY (application_id)         REFERENCES applications (application_id),
+  CONSTRAINT fk_resume_shares_contact     FOREIGN KEY (shared_with_contact_id) REFERENCES customer_contacts (contact_id),
+  CONSTRAINT fk_resume_shares_document    FOREIGN KEY (document_id)            REFERENCES candidate_documents (document_id),
+  CONSTRAINT fk_resume_shares_shared_by   FOREIGN KEY (shared_by)              REFERENCES users (user_id),
+  CONSTRAINT ck_resume_shares_expiry CHECK (access_expires_at IS NULL OR access_expires_at > shared_at)
+) ENGINE=InnoDB;
+
+/* ===================== 8. INTERVIEWS & FEEDBACK =========================== */
+
+CREATE TABLE interviews (
+  interview_id      INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  application_id    INT UNSIGNED NOT NULL,
+  round_number      TINYINT UNSIGNED NOT NULL,
+  interview_type    ENUM('PHONE','VIDEO','IN_PERSON') NOT NULL,
+  scheduled_start   DATETIME NOT NULL,
+  scheduled_end     DATETIME NOT NULL,
+  location_or_link  VARCHAR(500) NULL,
+  interviewer_user_id INT UNSIGNED NULL,
+  status            ENUM('SCHEDULED','COMPLETED','CANCELLED','NO_SHOW','RESCHEDULED') NOT NULL DEFAULT 'SCHEDULED',
+  created_by        INT UNSIGNED NULL,
+  created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT pk_interviews PRIMARY KEY (interview_id),
+  CONSTRAINT uq_interviews_round UNIQUE (application_id, round_number),
+  KEY ix_interviews_start (scheduled_start),
+  KEY ix_interviews_created_by (created_by),
+  KEY ix_interviews_interviewer (interviewer_user_id),
+  CONSTRAINT fk_interviews_application FOREIGN KEY (application_id)   REFERENCES applications (application_id),
+  CONSTRAINT fk_interviews_interviewer FOREIGN KEY (interviewer_user_id) REFERENCES users (user_id),
+  CONSTRAINT fk_interviews_created_by  FOREIGN KEY (created_by)       REFERENCES users (user_id),
+  CONSTRAINT ck_interviews_round CHECK (round_number >= 1),
+  CONSTRAINT ck_interviews_time  CHECK (scheduled_end > scheduled_start)
+) ENGINE=InnoDB;
+
+CREATE TABLE interview_feedback (
+  feedback_id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  interview_id         INT UNSIGNED NOT NULL,
+  technical_rating     DECIMAL(2,1) NULL,
+  communication_rating DECIMAL(2,1) NULL,
+  recommendation       ENUM('STRONG_HIRE','HIRE','HOLD','NO_HIRE') NOT NULL,
+  feedback_text        TEXT NULL,
+  entered_by           INT UNSIGNED NULL,
+  submitted_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT pk_interview_feedback PRIMARY KEY (feedback_id),
+  CONSTRAINT uq_interview_feedback_interview UNIQUE (interview_id),
+  KEY ix_interview_feedback_entered_by (entered_by),
+  CONSTRAINT fk_interview_feedback_interview   FOREIGN KEY (interview_id) REFERENCES interviews (interview_id),
+  CONSTRAINT fk_interview_feedback_entered_by  FOREIGN KEY (entered_by)   REFERENCES users (user_id),
+  CONSTRAINT ck_interview_feedback_tech CHECK (technical_rating     IS NULL OR technical_rating     BETWEEN 0 AND 5),
+  CONSTRAINT ck_interview_feedback_comm CHECK (communication_rating IS NULL OR communication_rating BETWEEN 0 AND 5)
+) ENGINE=InnoDB;
+
+/* ===================== 9. SELECTION, OFFER, PLACEMENT ===================== */
+
+CREATE TABLE selections (
+  selection_id              INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  application_id            INT UNSIGNED NOT NULL,
+  agreed_ctc                DECIMAL(12,2) NULL,
+  expected_joining_date     DATE NULL,
+  customer_confirmation_ref VARCHAR(160) NULL,
+  selected_by               INT UNSIGNED NULL,
+  selected_at               DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  notes                     VARCHAR(500) NULL,
+  CONSTRAINT pk_selections PRIMARY KEY (selection_id),
+  CONSTRAINT uq_selections_application UNIQUE (application_id),
+  KEY ix_selections_selected_by (selected_by),
+  CONSTRAINT fk_selections_application FOREIGN KEY (application_id) REFERENCES applications (application_id),
+  CONSTRAINT fk_selections_selected_by FOREIGN KEY (selected_by)    REFERENCES users (user_id),
+  CONSTRAINT ck_selections_ctc CHECK (agreed_ctc IS NULL OR agreed_ctc >= 0)
+) ENGINE=InnoDB;
+
+CREATE TABLE offers (
+  offer_id              INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  selection_id          INT UNSIGNED NOT NULL,
+  offer_reference       VARCHAR(100) NULL,
+  offered_ctc           DECIMAL(12,2) NULL,
+  offered_at            DATETIME NULL,
+  expires_at            DATETIME NULL,
+  proposed_joining_date DATE NULL,
+  status                ENUM('DRAFT','SENT','ACCEPTED','DECLINED','EXPIRED','WITHDRAWN') NOT NULL DEFAULT 'DRAFT',
+  document_path         VARCHAR(500) NULL,
+  responded_at          DATETIME NULL,
+  CONSTRAINT pk_offers PRIMARY KEY (offer_id),
+  CONSTRAINT uq_offers_reference UNIQUE (offer_reference),
+  KEY ix_offers_selection_status (selection_id, status),
+  CONSTRAINT fk_offers_selection FOREIGN KEY (selection_id) REFERENCES selections (selection_id),
+  CONSTRAINT ck_offers_ctc    CHECK (offered_ctc IS NULL OR offered_ctc >= 0),
+  CONSTRAINT ck_offers_expiry CHECK (expires_at IS NULL OR offered_at IS NULL OR expires_at > offered_at),
+  CONSTRAINT ck_offers_sent   CHECK (status IN ('DRAFT','WITHDRAWN') OR offered_at IS NOT NULL)
+) ENGINE=InnoDB;
+
+CREATE TABLE placements (
+  placement_id            INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  selection_id            INT UNSIGNED NOT NULL,
+  joining_date            DATE NULL,
+  evidence_type           ENUM('OFFER_ACCEPTANCE','JOINING_LETTER','CUSTOMER_EMAIL','PAYSLIP','OTHER') NULL,
+  evidence_path           VARCHAR(500) NULL,
+  confirmed_by_contact_id INT UNSIGNED NULL,
+  confirmed_at            DATETIME NULL,
+  guarantee_end_date      DATE NULL,
+  outcome                 ENUM('PENDING','JOINED','NOT_JOINED','EXITED_IN_GUARANTEE','CONFIRMED') NOT NULL DEFAULT 'PENDING',
+  notes                   VARCHAR(500) NULL,
+  CONSTRAINT pk_placements PRIMARY KEY (placement_id),
+  CONSTRAINT uq_placements_selection UNIQUE (selection_id),
+  KEY ix_placements_confirmed_by (confirmed_by_contact_id),
+  KEY ix_placements_outcome (outcome),
+  CONSTRAINT fk_placements_selection    FOREIGN KEY (selection_id)            REFERENCES selections (selection_id),
+  CONSTRAINT fk_placements_confirmed_by FOREIGN KEY (confirmed_by_contact_id) REFERENCES customer_contacts (contact_id),
+  CONSTRAINT ck_placements_guarantee CHECK (guarantee_end_date IS NULL OR joining_date IS NULL OR guarantee_end_date >= joining_date),
+  CONSTRAINT ck_placements_confirmed CHECK ((confirmed_by_contact_id IS NULL) = (confirmed_at IS NULL)),
+  CONSTRAINT ck_placements_joined    CHECK (outcome IN ('PENDING','NOT_JOINED') OR joining_date IS NOT NULL)
+) ENGINE=InnoDB;
+
+/* ================== 10. EMPLOYEES, CONTRACTS, DEPLOYMENT ================== */
+
+CREATE TABLE employees (
+  employee_id     INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  employee_code   VARCHAR(30) NOT NULL,
+  candidate_id    INT UNSIGNED NOT NULL,
+  date_of_joining DATE NULL,
+  status          ENUM('ONBOARDING','ACTIVE','ON_LEAVE','EXITED') NOT NULL DEFAULT 'ONBOARDING',
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT pk_employees PRIMARY KEY (employee_id),
+  CONSTRAINT uq_employees_code      UNIQUE (employee_code),
+  CONSTRAINT uq_employees_candidate UNIQUE (candidate_id),
+  CONSTRAINT fk_employees_candidate FOREIGN KEY (candidate_id) REFERENCES candidates (candidate_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE employment_contracts (
+  contract_id        INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  employee_id        INT UNSIGNED NOT NULL,
+  contract_number    VARCHAR(60) NOT NULL,
+  contract_type      ENUM('PERMANENT','FIXED_TERM','PART_TIME') NOT NULL,
+  start_date         DATE NOT NULL,
+  end_date           DATE NULL,
+  compensation_basis ENUM('MONTHLY','DAILY','HOURLY') NOT NULL,
+  gross_compensation DECIMAL(12,2) NOT NULL,
+  status             ENUM('DRAFT','ACTIVE','EXPIRED','TERMINATED') NOT NULL DEFAULT 'DRAFT',
+  signed_date        DATE NULL,
+  document_path      VARCHAR(500) NULL,
+  CONSTRAINT pk_employment_contracts PRIMARY KEY (contract_id),
+  CONSTRAINT uq_employment_contracts_number UNIQUE (contract_number),
+  KEY ix_employment_contracts_employee (employee_id, status),
+  CONSTRAINT fk_employment_contracts_employee FOREIGN KEY (employee_id) REFERENCES employees (employee_id),
+  CONSTRAINT ck_employment_contracts_dates  CHECK (end_date IS NULL OR end_date >= start_date),
+  CONSTRAINT ck_employment_contracts_amount CHECK (gross_compensation > 0),
+  CONSTRAINT ck_employment_contracts_fixed  CHECK (contract_type <> 'FIXED_TERM' OR end_date IS NOT NULL)
+) ENGINE=InnoDB;
+
+CREATE TABLE deployments (
+  deployment_id             INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  employee_id               INT UNSIGNED NOT NULL,
+  selection_id              INT UNSIGNED NOT NULL,
+  work_location             VARCHAR(200) NULL,
+  start_date                DATE NOT NULL,
+  end_date                  DATE NULL,
+  agreed_hours_per_week     DECIMAL(5,2) NULL,
+  customer_supervisor_contact_id INT UNSIGNED NULL,
+  status                    ENUM('PLANNED','ACTIVE','COMPLETED','TERMINATED') NOT NULL DEFAULT 'PLANNED',
+  created_at                DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT pk_deployments PRIMARY KEY (deployment_id),
+  CONSTRAINT uq_deployments_emp_sel UNIQUE (employee_id, selection_id),
+  KEY ix_deployments_selection (selection_id),
+  KEY ix_deployments_status (status),
+  KEY ix_deployments_supervisor (customer_supervisor_contact_id),
+  CONSTRAINT fk_deployments_employee   FOREIGN KEY (employee_id)  REFERENCES employees (employee_id),
+  CONSTRAINT fk_deployments_selection  FOREIGN KEY (selection_id) REFERENCES selections (selection_id),
+  CONSTRAINT fk_deployments_supervisor FOREIGN KEY (customer_supervisor_contact_id) REFERENCES customer_contacts (contact_id),
+  CONSTRAINT ck_deployments_dates CHECK (end_date IS NULL OR end_date >= start_date),
+  CONSTRAINT ck_deployments_hours CHECK (agreed_hours_per_week IS NULL OR (agreed_hours_per_week > 0 AND agreed_hours_per_week <= 168))
+) ENGINE=InnoDB;
+
+CREATE TABLE attendance (
+  attendance_id     BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  deployment_id     INT UNSIGNED NOT NULL,
+  attendance_date   DATE NOT NULL,
+  check_in          DATETIME NULL,
+  check_out         DATETIME NULL,
+  attendance_status ENUM('PRESENT','ABSENT','HALF_DAY','LEAVE','HOLIDAY','WEEK_OFF') NOT NULL,
+  regular_hours     DECIMAL(5,2) NOT NULL DEFAULT 0,
+  overtime_hours    DECIMAL(5,2) NOT NULL DEFAULT 0,
+  approved_by       INT UNSIGNED NULL,
+  approved_at       DATETIME NULL,
+  CONSTRAINT pk_attendance PRIMARY KEY (attendance_id),
+  CONSTRAINT uq_attendance_day UNIQUE (deployment_id, attendance_date),
+  KEY ix_attendance_approved_by (approved_by),
+  CONSTRAINT fk_attendance_deployment  FOREIGN KEY (deployment_id) REFERENCES deployments (deployment_id),
+  CONSTRAINT fk_attendance_approved_by FOREIGN KEY (approved_by)   REFERENCES users (user_id),
+  CONSTRAINT ck_attendance_times CHECK (check_out IS NULL OR check_in IS NULL OR check_out >= check_in),
+  CONSTRAINT ck_attendance_hours CHECK (regular_hours BETWEEN 0 AND 24 AND overtime_hours BETWEEN 0 AND 24
+                                        AND regular_hours + overtime_hours <= 24),
+  CONSTRAINT ck_attendance_approval CHECK ((approved_by IS NULL) = (approved_at IS NULL))
+) ENGINE=InnoDB;
+
+/* ===================== 11. BILLING, PAYMENTS, ALLOCATION ================== */
+
+CREATE TABLE invoices (
+  invoice_id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  invoice_number       VARCHAR(60) NOT NULL,
+  service_order_id     INT UNSIGNED NOT NULL,
+  invoice_type         ENUM('PLACEMENT_FEE','MONTHLY_SERVICE','MANAGEMENT_FEE','ADJUSTMENT') NOT NULL,
+  invoice_date         DATE NOT NULL,
+  due_date             DATE NOT NULL,
+  service_period_start DATE NULL,
+  service_period_end   DATE NULL,
+  subtotal             DECIMAL(14,2) NOT NULL DEFAULT 0,
+  discount_amount      DECIMAL(14,2) NOT NULL DEFAULT 0,
+  tax_total            DECIMAL(14,2) NOT NULL DEFAULT 0,
+  total_amount         DECIMAL(14,2) NOT NULL DEFAULT 0,
+  status               ENUM('DRAFT','ISSUED','CANCELLED') NOT NULL DEFAULT 'DRAFT',
+  created_by           INT UNSIGNED NULL,
+  created_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT pk_invoices PRIMARY KEY (invoice_id),
+  CONSTRAINT uq_invoices_number UNIQUE (invoice_number),
+  KEY ix_invoices_order (service_order_id),
+  KEY ix_invoices_status_due (status, due_date),
+  KEY ix_invoices_created_by (created_by),
+  CONSTRAINT fk_invoices_order      FOREIGN KEY (service_order_id) REFERENCES service_orders (service_order_id),
+  CONSTRAINT fk_invoices_created_by FOREIGN KEY (created_by)       REFERENCES users (user_id),
+  CONSTRAINT ck_invoices_due     CHECK (due_date >= invoice_date),
+  CONSTRAINT ck_invoices_period  CHECK (service_period_end IS NULL OR service_period_start IS NULL OR service_period_end >= service_period_start),
+  CONSTRAINT ck_invoices_amounts CHECK (subtotal >= 0 AND discount_amount >= 0 AND tax_total >= 0
+                                        AND discount_amount <= subtotal),
+  CONSTRAINT ck_invoices_total   CHECK (total_amount = subtotal - discount_amount + tax_total)
+) ENGINE=InnoDB;
+
+CREATE TABLE invoice_items (
+  item_id        INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  invoice_id     INT UNSIGNED NOT NULL,
+  deployment_id  INT UNSIGNED NULL,
+  placement_id   INT UNSIGNED NULL,
+  description    VARCHAR(300) NOT NULL,
+  quantity       DECIMAL(10,2) NOT NULL,
+  unit_price     DECIMAL(12,2) NOT NULL,
+  tax_rate       DECIMAL(5,2)  NOT NULL DEFAULT 0,
+  taxable_value  DECIMAL(14,2) GENERATED ALWAYS AS (ROUND(quantity * unit_price, 2)) STORED,
+  tax_amount     DECIMAL(14,2) GENERATED ALWAYS AS (ROUND(ROUND(quantity * unit_price, 2) * tax_rate / 100, 2)) STORED,
+  line_total     DECIMAL(14,2) GENERATED ALWAYS AS (ROUND(quantity * unit_price, 2)
+                                                    + ROUND(ROUND(quantity * unit_price, 2) * tax_rate / 100, 2)) STORED,
+  CONSTRAINT pk_invoice_items PRIMARY KEY (item_id),
+  KEY ix_invoice_items_invoice (invoice_id),
+  KEY ix_invoice_items_deployment (deployment_id),
+  KEY ix_invoice_items_placement (placement_id),
+  CONSTRAINT fk_invoice_items_invoice    FOREIGN KEY (invoice_id)    REFERENCES invoices (invoice_id),
+  CONSTRAINT fk_invoice_items_deployment FOREIGN KEY (deployment_id) REFERENCES deployments (deployment_id),
+  CONSTRAINT fk_invoice_items_placement  FOREIGN KEY (placement_id)  REFERENCES placements (placement_id),
+  CONSTRAINT ck_invoice_items_source CHECK (deployment_id IS NULL OR placement_id IS NULL),
+  CONSTRAINT ck_invoice_items_qty    CHECK (quantity > 0 AND unit_price >= 0),
+  CONSTRAINT ck_invoice_items_tax    CHECK (tax_rate BETWEEN 0 AND 100)
+) ENGINE=InnoDB;
+
+CREATE TABLE payments (
+  payment_id            INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  payment_reference     VARCHAR(120) NOT NULL,
+  customer_id           INT UNSIGNED NOT NULL,
+  payment_date          DATE NOT NULL,
+  amount                DECIMAL(14,2) NOT NULL,
+  payment_method        ENUM('BANK_TRANSFER','UPI','CHEQUE','CARD','CASH','OTHER') NOT NULL,
+  transaction_reference VARCHAR(160) NULL,
+  status                ENUM('PENDING','CLEARED','FAILED','REVERSED') NOT NULL DEFAULT 'PENDING',
+  created_at            DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT pk_payments PRIMARY KEY (payment_id),
+  CONSTRAINT uq_payments_reference UNIQUE (payment_reference),
+  KEY ix_payments_customer_date (customer_id, payment_date),
+  CONSTRAINT fk_payments_customer FOREIGN KEY (customer_id) REFERENCES customers (customer_id),
+  CONSTRAINT ck_payments_amount CHECK (amount > 0)
+) ENGINE=InnoDB;
+
+CREATE TABLE payment_allocations (
+  payment_id       INT UNSIGNED NOT NULL,
+  invoice_id       INT UNSIGNED NOT NULL,
+  allocated_amount DECIMAL(14,2) NOT NULL,
+  CONSTRAINT pk_payment_allocations PRIMARY KEY (payment_id, invoice_id),
+  KEY ix_payment_allocations_invoice (invoice_id),
+  CONSTRAINT fk_payment_allocations_payment FOREIGN KEY (payment_id) REFERENCES payments (payment_id),
+  CONSTRAINT fk_payment_allocations_invoice FOREIGN KEY (invoice_id) REFERENCES invoices (invoice_id),
+  CONSTRAINT ck_payment_allocations_amount CHECK (allocated_amount > 0)
+) ENGINE=InnoDB;
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+/* ========================================================================== 
+   CROSS-TABLE RULES
+   ========================================================================== */
+
+DELIMITER $$
+
+/* a) A resume share must use a document of the SAME candidate as the application,
+      and go to a contact of the SAME customer that owns the requirement.        */
+CREATE PROCEDURE sp_check_resume_share(IN p_app INT UNSIGNED, IN p_doc INT UNSIGNED, IN p_contact INT UNSIGNED)
+BEGIN
+  DECLARE v_app_cand  INT UNSIGNED;
+  DECLARE v_app_cust  INT UNSIGNED;
+  DECLARE v_doc_cand  INT UNSIGNED;
+  DECLARE v_cont_cust INT UNSIGNED;
+
+  SELECT ap.candidate_id, ag.customer_id INTO v_app_cand, v_app_cust
+    FROM applications ap
+    JOIN job_requirements jr ON jr.requirement_id = ap.requirement_id
+    JOIN service_orders so   ON so.service_order_id = jr.service_order_id
+    JOIN agreements ag       ON ag.agreement_id = so.agreement_id
+   WHERE ap.application_id = p_app;
+  SELECT candidate_id INTO v_doc_cand  FROM candidate_documents WHERE document_id = p_doc;
+  SELECT customer_id  INTO v_cont_cust FROM customer_contacts   WHERE contact_id  = p_contact;
+
+  IF v_doc_cand <> v_app_cand THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'resume_shares: document does not belong to the application candidate';
+  END IF;
+  IF v_cont_cust <> v_app_cust THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'resume_shares: contact does not belong to the requirement customer';
+  END IF;
+END$$
+
+CREATE TRIGGER trg_resume_shares_bi BEFORE INSERT ON resume_shares FOR EACH ROW
+BEGIN CALL sp_check_resume_share(NEW.application_id, NEW.document_id, NEW.shared_with_contact_id); END$$
+CREATE TRIGGER trg_resume_shares_bu BEFORE UPDATE ON resume_shares FOR EACH ROW
+BEGIN CALL sp_check_resume_share(NEW.application_id, NEW.document_id, NEW.shared_with_contact_id); END$$
+
+/* b) Invoice lines: invoice must be DRAFT, and the billed deployment/placement
+      must belong to the same service order as the invoice.                      */
+CREATE PROCEDURE sp_check_invoice_item(IN p_invoice INT UNSIGNED, IN p_dep INT UNSIGNED, IN p_plc INT UNSIGNED)
+BEGIN
+  DECLARE v_inv_so   INT UNSIGNED;
+  DECLARE v_inv_stat VARCHAR(20);
+  DECLARE v_item_so  INT UNSIGNED;
+
+  SELECT service_order_id, status INTO v_inv_so, v_inv_stat FROM invoices WHERE invoice_id = p_invoice;
+  IF v_inv_stat <> 'DRAFT' THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'invoice_items: only DRAFT invoices can be changed';
+  END IF;
+
+  IF p_dep IS NOT NULL THEN
+    SELECT jr.service_order_id INTO v_item_so
+      FROM deployments d
+      JOIN selections s ON s.selection_id = d.selection_id
+      JOIN applications ap ON ap.application_id = s.application_id
+      JOIN job_requirements jr ON jr.requirement_id = ap.requirement_id
+     WHERE d.deployment_id = p_dep;
+  ELSEIF p_plc IS NOT NULL THEN
+    SELECT jr.service_order_id INTO v_item_so
+      FROM placements p
+      JOIN selections s ON s.selection_id = p.selection_id
+      JOIN applications ap ON ap.application_id = s.application_id
+      JOIN job_requirements jr ON jr.requirement_id = ap.requirement_id
+     WHERE p.placement_id = p_plc;
+  END IF;
+
+  IF v_item_so IS NOT NULL AND v_item_so <> v_inv_so THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'invoice_items: billed deployment/placement belongs to a different service order';
+  END IF;
+END$$
+
+CREATE TRIGGER trg_invoice_items_bi BEFORE INSERT ON invoice_items FOR EACH ROW
+BEGIN CALL sp_check_invoice_item(NEW.invoice_id, NEW.deployment_id, NEW.placement_id); END$$
+CREATE TRIGGER trg_invoice_items_bu BEFORE UPDATE ON invoice_items FOR EACH ROW
+BEGIN CALL sp_check_invoice_item(NEW.invoice_id, NEW.deployment_id, NEW.placement_id); END$$
+
+/* c) Payment allocation: same customer, invoice ISSUED, never over-allocate a
+      payment or an invoice. Rows are locked (FOR UPDATE) to serialise races.
+      p_old_payment/p_old_invoice identify the row being updated (excluded from sums). */
+CREATE PROCEDURE sp_check_payment_allocation(IN p_payment INT UNSIGNED, IN p_invoice INT UNSIGNED,
+                                             IN p_amount DECIMAL(14,2),
+                                             IN p_old_payment INT UNSIGNED, IN p_old_invoice INT UNSIGNED)
+BEGIN
+  DECLARE v_pay_amt   DECIMAL(14,2);
+  DECLARE v_pay_cust  INT UNSIGNED;
+  DECLARE v_inv_total DECIMAL(14,2);
+  DECLARE v_inv_stat  VARCHAR(20);
+  DECLARE v_inv_cust  INT UNSIGNED;
+  DECLARE v_pay_used  DECIMAL(14,2);
+  DECLARE v_inv_used  DECIMAL(14,2);
+
+  SELECT amount, customer_id INTO v_pay_amt, v_pay_cust FROM payments WHERE payment_id = p_payment FOR UPDATE;
+  SELECT i.total_amount, i.status, ag.customer_id INTO v_inv_total, v_inv_stat, v_inv_cust
+    FROM invoices i
+    JOIN service_orders so ON so.service_order_id = i.service_order_id
+    JOIN agreements ag     ON ag.agreement_id = so.agreement_id
+   WHERE i.invoice_id = p_invoice FOR UPDATE OF i;
+
+  IF v_pay_cust <> v_inv_cust THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'payment_allocations: payment and invoice belong to different customers';
+  END IF;
+  IF v_inv_stat <> 'ISSUED' THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'payment_allocations: only ISSUED invoices can receive payments';
+  END IF;
+
+  SELECT COALESCE(SUM(allocated_amount), 0) INTO v_pay_used FROM payment_allocations
+   WHERE payment_id = p_payment AND NOT (payment_id <=> p_old_payment AND invoice_id <=> p_old_invoice);
+  SELECT COALESCE(SUM(allocated_amount), 0) INTO v_inv_used FROM payment_allocations
+   WHERE invoice_id = p_invoice AND NOT (payment_id <=> p_old_payment AND invoice_id <=> p_old_invoice);
+
+  IF v_pay_used + p_amount > v_pay_amt THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'payment_allocations: allocation exceeds the payment amount';
+  END IF;
+  IF v_inv_used + p_amount > v_inv_total THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'payment_allocations: allocation exceeds the invoice total';
+  END IF;
+END$$
+
+CREATE TRIGGER trg_payment_allocations_bi BEFORE INSERT ON payment_allocations FOR EACH ROW
+BEGIN CALL sp_check_payment_allocation(NEW.payment_id, NEW.invoice_id, NEW.allocated_amount, NULL, NULL); END$$
+CREATE TRIGGER trg_payment_allocations_bu BEFORE UPDATE ON payment_allocations FOR EACH ROW
+BEGIN CALL sp_check_payment_allocation(NEW.payment_id, NEW.invoice_id, NEW.allocated_amount, OLD.payment_id, OLD.invoice_id); END$$
+
+/* d) Deployments: only DTS-payroll service orders create deployments; the employee
+      must be the selected candidate; the supervisor must be a contact of the same customer. */
+CREATE PROCEDURE sp_check_deployment(IN p_employee INT UNSIGNED, IN p_selection INT UNSIGNED, IN p_supervisor INT UNSIGNED)
+BEGIN
+  DECLARE v_model     VARCHAR(20);
+  DECLARE v_cust      INT UNSIGNED;
+  DECLARE v_sel_cand  INT UNSIGNED;
+  DECLARE v_emp_cand  INT UNSIGNED;
+  DECLARE v_sup_cust  INT UNSIGNED;
+
+  SELECT st.employment_model, ag.customer_id, ap.candidate_id INTO v_model, v_cust, v_sel_cand
+    FROM selections s
+    JOIN applications ap     ON ap.application_id = s.application_id
+    JOIN job_requirements jr ON jr.requirement_id = ap.requirement_id
+    JOIN service_orders so   ON so.service_order_id = jr.service_order_id
+    JOIN service_types st    ON st.service_type_id = so.service_type_id
+    JOIN agreements ag       ON ag.agreement_id = so.agreement_id
+   WHERE s.selection_id = p_selection;
+  SELECT candidate_id INTO v_emp_cand FROM employees WHERE employee_id = p_employee;
+
+  IF v_model <> 'DTS_PAYROLL' THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'deployments: only DTS_PAYROLL service orders create deployments';
+  END IF;
+  IF v_emp_cand <> v_sel_cand THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'deployments: employee is not the candidate of this selection';
+  END IF;
+  IF p_supervisor IS NOT NULL THEN
+    SELECT customer_id INTO v_sup_cust FROM customer_contacts WHERE contact_id = p_supervisor;
+    IF v_sup_cust <> v_cust THEN
+      SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'deployments: supervisor is not a contact of the customer';
+    END IF;
+  END IF;
+END$$
+
+CREATE TRIGGER trg_deployments_bi BEFORE INSERT ON deployments FOR EACH ROW
+BEGIN CALL sp_check_deployment(NEW.employee_id, NEW.selection_id, NEW.customer_supervisor_contact_id); END$$
+CREATE TRIGGER trg_deployments_bu BEFORE UPDATE ON deployments FOR EACH ROW
+BEGIN CALL sp_check_deployment(NEW.employee_id, NEW.selection_id, NEW.customer_supervisor_contact_id); END$$
+
+/* e) Invoice lifecycle: DRAFT -> ISSUED -> CANCELLED (final).
+      - issuing requires header totals = sum of line items (and at least one line)
+      - ISSUED / CANCELLED invoices are immutable (amounts, number, service order)
+      - an invoice with payment allocations cannot be cancelled
+      - lines can only be deleted while the invoice is DRAFT                      */
+CREATE TRIGGER trg_invoices_bu BEFORE UPDATE ON invoices FOR EACH ROW
+BEGIN
+  DECLARE v_cnt INT;
+  DECLARE v_sub DECIMAL(14,2);
+  DECLARE v_tax DECIMAL(14,2);
+
+  IF OLD.status <> 'DRAFT' AND (NEW.invoice_number <> OLD.invoice_number OR NEW.service_order_id <> OLD.service_order_id
+       OR NEW.subtotal <> OLD.subtotal OR NEW.discount_amount <> OLD.discount_amount
+       OR NEW.tax_total <> OLD.tax_total OR NEW.total_amount <> OLD.total_amount) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'invoices: an ISSUED or CANCELLED invoice cannot be modified';
+  END IF;
+  IF (OLD.status = 'CANCELLED' AND NEW.status <> 'CANCELLED') OR (OLD.status = 'ISSUED' AND NEW.status = 'DRAFT') THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'invoices: invalid status transition';
+  END IF;
+  IF OLD.status = 'DRAFT' AND NEW.status = 'ISSUED' THEN
+    SELECT COUNT(*), COALESCE(SUM(taxable_value), 0), COALESCE(SUM(tax_amount), 0) INTO v_cnt, v_sub, v_tax
+      FROM invoice_items WHERE invoice_id = OLD.invoice_id;
+    IF v_cnt = 0 OR v_sub <> NEW.subtotal OR v_tax <> NEW.tax_total THEN
+      SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'invoices: header subtotal/tax must equal the sum of the line items';
+    END IF;
+  END IF;
+  IF NEW.status = 'CANCELLED' AND OLD.status <> 'CANCELLED'
+     AND EXISTS (SELECT 1 FROM payment_allocations WHERE invoice_id = OLD.invoice_id) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'invoices: cannot cancel an invoice that has payment allocations';
+  END IF;
+END$$
+
+CREATE TRIGGER trg_invoice_items_bd BEFORE DELETE ON invoice_items FOR EACH ROW
+BEGIN
+  IF (SELECT status FROM invoices WHERE invoice_id = OLD.invoice_id) <> 'DRAFT' THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'invoice_items: only DRAFT invoices can be changed';
+  END IF;
+END$$
+
+DELIMITER ;
+
+/* ========================================================================== 
+   VIEW: derived payment state (replaces storing PAID / PARTIALLY_PAID / OVERDUE)
+   Only CLEARED payments count as received.
+   ========================================================================== */
+CREATE OR REPLACE VIEW v_invoice_balance AS
+    SELECT 
+        i.invoice_id,
+        i.invoice_number,
+        ag.customer_id,
+        i.service_order_id,
+        i.invoice_date,
+        i.due_date,
+        i.total_amount,
+        COALESCE(SUM(CASE
+                    WHEN p.payment_id IS NOT NULL THEN pa.allocated_amount
+                END),
+                0) AS paid_amount,
+        i.total_amount - COALESCE(SUM(CASE
+                    WHEN p.payment_id IS NOT NULL THEN pa.allocated_amount
+                END),
+                0) AS balance_amount,
+        CASE
+            WHEN i.status = 'CANCELLED' THEN 'CANCELLED'
+            WHEN i.status = 'DRAFT' THEN 'DRAFT'
+            WHEN
+                COALESCE(SUM(CASE
+                            WHEN p.payment_id IS NOT NULL THEN pa.allocated_amount
+                        END),
+                        0) >= i.total_amount
+            THEN
+                'PAID'
+            WHEN i.due_date < CURRENT_DATE() THEN 'OVERDUE'
+            WHEN
+                COALESCE(SUM(CASE
+                            WHEN p.payment_id IS NOT NULL THEN pa.allocated_amount
+                        END),
+                        0) > 0
+            THEN
+                'PARTIALLY_PAID'
+            ELSE 'UNPAID'
+        END AS payment_status
+    FROM
+        invoices i
+            JOIN
+        service_orders so ON so.service_order_id = i.service_order_id
+            JOIN
+        agreements ag ON ag.agreement_id = so.agreement_id
+            LEFT JOIN
+        payment_allocations pa ON pa.invoice_id = i.invoice_id
+            LEFT JOIN
+        payments p ON p.payment_id = pa.payment_id
+            AND p.status = 'CLEARED'
+    GROUP BY i.invoice_id , i.invoice_number , ag.customer_id , i.service_order_id , i.invoice_date , i.due_date , i.total_amount , i.status;
+
+
+USE dts_recruitment;
+SET NAMES utf8mb4;
+SET time_zone = '+00:00';
+START TRANSACTION;
+
+-- 1. USERS
+INSERT INTO users (user_id,full_name,email,mobile,password_hash,role,status) VALUES
+(1,'Amit Sharma','amit.admin@example.com','9000000001',NULL,'ADMIN','ACTIVE'),
+(2,'Rahul Verma','rahul.recruiter@example.com','9000000002',NULL,'RECRUITER','ACTIVE'),
+(3,'Neha Singh','neha.recruiter@example.com','9000000003',NULL,'RECRUITER','ACTIVE'),
+(4,'Ankit Mehta','ankit.hiring@example.com','9000000004',NULL,'CUSTOMER','ACTIVE'),
+(5,'Priya Kapoor','priya.billing@example.com','9000000005',NULL,'CUSTOMER','ACTIVE'),
+(6,'Arjun Rao','arjun.candidate@example.com','9000000006',NULL,'CANDIDATE','ACTIVE'),
+(7,'Sneha Iyer','sneha.candidate@example.com','9000000007',NULL,'CANDIDATE','ACTIVE'),
+(8,'Vikram Das','vikram.candidate@example.com','9000000008',NULL,'CANDIDATE','ACTIVE'),
+(9,'Karan Malhotra','karan.hiring@example.com','9000000009',NULL,'CUSTOMER','ACTIVE');
+
+-- 2. CUSTOMERS, ADDRESSES, CONTACTS
+INSERT INTO customers (customer_id,customer_code,company_name,gstin,pan,industry,payment_terms_days,status,account_owner_id) VALUES
+(1,'CUS-001','Northstar Technologies Pvt Ltd','07AABCN1234F1Z5','AABCN1234F','Information Technology',30,'ACTIVE',1),
+(2,'CUS-002','BluePeak Analytics Pvt Ltd','27AABCB5678G1Z2','AABCB5678G','Data & Analytics',45,'ACTIVE',1);
+
+INSERT INTO customer_addresses (address_id,customer_id,address_type,address_line,city,state,postal_code,is_primary) VALUES
+(1,1,'REGISTERED','5th Floor, Tower A, Sector 62','Noida','Uttar Pradesh','201309',1),
+(2,1,'BILLING','5th Floor, Tower A, Sector 62','Noida','Uttar Pradesh','201309',1),
+(3,2,'REGISTERED','Business Park, Hinjewadi Phase 1','Pune','Maharashtra','411057',1),
+(4,2,'BILLING','Business Park, Hinjewadi Phase 1','Pune','Maharashtra','411057',1);
+
+INSERT INTO customer_contacts (contact_id,customer_id,user_id,designation,contact_type,is_primary,status) VALUES
+(1,1,4,'Talent Acquisition Manager','HIRING',1,'ACTIVE'),
+(2,1,5,'Finance Manager','BILLING',0,'ACTIVE'),
+(3,2,9,'Talent Acquisition Lead','HIRING',1,'ACTIVE');
+
+INSERT INTO skills (skill_id,skill_name,skill_category) VALUES
+(1,'Java','Backend'),(2,'Spring Boot','Backend'),(3,'React','Frontend'),
+(4,'MySQL','Database'),(5,'REST API','Backend'),(6,'Python','Programming'),
+(7,'SQL','Database'),(8,'Selenium','Testing'),(9,'JavaScript','Frontend');
+
+INSERT INTO service_types (service_type_id,service_code,service_name,employment_model) VALUES
+(1,'DTS-FT','Full-time staffing - DTS payroll','DTS_PAYROLL'),
+(2,'DTS-PT','Part-time staffing - DTS payroll','DTS_PAYROLL'),
+(3,'CUST-PAY','Customer payroll recruitment','CUSTOMER_PAYROLL');
+
+INSERT INTO job_profiles (job_profile_id,profile_code,profile_name,category,purpose,key_responsibilities,qualifications,reporting_to,default_experience_min,default_experience_max,status,created_by) VALUES
+(1,'JP-JAVA-DEV','Java Full Stack Developer','Software Development','Develop and maintain enterprise web applications.','Build REST APIs; develop backend services; integrate React UI; write SQL queries; participate in code reviews.','B.Tech/MCA or equivalent; Java, Spring Boot, React and SQL knowledge.','Technical Lead',2.0,5.0,'ACTIVE',1),
+(2,'JP-QA-AUTO','Automation Test Engineer','Quality Engineering','Ensure product quality through automated and manual testing.','Create test cases; automate regression tests; test REST APIs; report and track defects.','Graduate degree; Selenium, Java/Python, API testing and SQL.','QA Lead',1.0,4.0,'ACTIVE',1);
+
+INSERT INTO job_profile_skills (job_profile_id,skill_id,is_mandatory,min_experience_years) VALUES
+(1,1,1,2.0),(1,2,1,1.0),(1,3,1,1.0),(1,4,1,1.0),(1,5,1,1.0),(1,9,0,1.0),
+(2,8,1,1.0),(2,5,1,1.0),(2,7,1,1.0),(2,1,0,0.5);
+
+-- 4. AGREEMENT, RATE CARDS, SERVICE ORDERS
+INSERT INTO agreements (agreement_id,agreement_number,customer_id,title,status,effective_date,expiry_date,signed_date,auto_renew,created_by) VALUES
+(1,'AGR-2026-001',1,'Recruitment and Staffing Master Services Agreement','ACTIVE','2026-01-01','2026-12-31','2025-12-20',1,1),
+(2,'AGR-2026-002',2,'Technology Talent Acquisition Agreement','ACTIVE','2026-02-01','2027-01-31','2026-01-25',0,1);
+
+INSERT INTO rate_cards (rate_card_id,agreement_id,service_type_id,job_profile_id,fee_type,fee_basis,fee_value,billing_frequency,replacement_days,effective_from,effective_to) VALUES
+(1,1,1,1,'PERCENTAGE','ANNUAL_CTC',8.00,'ONE_TIME',90,'2026-01-01','2026-12-31'),
+(2,1,1,2,'PERCENTAGE','ANNUAL_CTC',7.00,'ONE_TIME',60,'2026-01-01','2026-12-31'),
+(3,2,3,1,'PERCENTAGE','ANNUAL_CTC',6.00,'ONE_TIME',90,'2026-02-01','2027-01-31');
+
+INSERT INTO service_orders (service_order_id,order_number,agreement_id,service_type_id,customer_reference,title,scope_description,start_date,end_date,status,approved_by,approved_at) VALUES
+(1,'SO-2026-001',1,1,'NST-HR-104','Technology hiring - Q2','Recruitment of Java full stack developers and QA automation engineers.','2026-04-01','2026-09-30','IN_PROGRESS',1,'2026-03-25 10:00:00'),
+(2,'SO-2026-002',2,3,'BPA-TA-022','Engineering recruitment','Customer-payroll recruitment for software engineering roles.','2026-05-01','2026-10-31','APPROVED',1,'2026-04-20 10:00:00');
+
+-- 5. JOB REQUIREMENTS, ASSIGNMENTS, REQUIRED SKILLS
+INSERT INTO job_requirements (requirement_id,requirement_number,service_order_id,job_profile_id,raised_by_user_id,job_title,job_description,headcount,work_mode,work_location,experience_min_years,experience_max_years,salary_min,salary_max,employment_schedule,hours_per_week,target_join_date,status,approved_by,approved_at,published_at) VALUES
+(1,'REQ-2026-001',1,1,4,'Java Full Stack Developer','Build and support Spring Boot REST services and React-based user interfaces.',2,'HYBRID','Noida',2.0,4.0,600000,1200000,'FULL_TIME',NULL,'2026-07-01','OPEN',1,'2026-04-02 11:00:00','2026-04-03 09:00:00'),
+(2,'REQ-2026-002',1,2,4,'Automation Test Engineer','Develop Selenium automation and validate REST APIs for enterprise applications.',1,'ONSITE','Noida',1.0,3.0,400000,800000,'FULL_TIME',NULL,'2026-07-15','OPEN',1,'2026-04-02 11:30:00','2026-04-03 09:30:00'),
+(3,'REQ-2026-003',2,1,9,'Java Backend Developer','Develop Java and Spring Boot services with MySQL integration.',1,'REMOTE','Pune',3.0,5.0,800000,1400000,'FULL_TIME',NULL,'2026-08-01','APPROVED',1,'2026-05-02 12:00:00',NULL);
+
+INSERT INTO requirement_assignments (assignment_id,requirement_id,recruiter_id,assignment_role) VALUES
+(1,1,2,'LEAD'),(2,1,3,'SUPPORT'),(3,2,3,'LEAD'),(4,3,2,'LEAD');
+
+INSERT INTO job_requirement_skills (requirement_id,skill_id,is_mandatory,min_experience_years) VALUES
+(1,1,1,2.0),(1,2,1,1.0),(1,3,1,1.0),(1,4,1,1.0),(1,5,1,1.0),
+(2,8,1,1.0),(2,5,1,1.0),(2,7,1,1.0),
+(3,1,1,3.0),(3,2,1,2.0),(3,4,1,2.0),(3,5,1,2.0);
+
+-- 6. CANDIDATES AND THEIR PROFILES
+INSERT INTO candidates (candidate_id,candidate_code,first_name,last_name,email,mobile,date_of_birth,current_city,current_state,total_experience_years,current_ctc,expected_ctc,notice_period_days,source,profile_summary,status,created_by,user_id) VALUES
+(1,'CAN-2026-001','Arjun','Rao','arjun.candidate@example.com','9000000006','1998-04-12','Noida','Uttar Pradesh',3.0,650000,900000,30,'REFERRAL','Java developer with Spring Boot, REST API and React experience.','ACTIVE',2,6),
+(2,'CAN-2026-002','Sneha','Iyer','sneha.candidate@example.com','9000000007','1999-08-21','Delhi','Delhi',2.0,500000,750000,15,'JOB_BOARD','QA engineer experienced in Selenium, API testing and SQL.','ACTIVE',3,7),
+(3,'CAN-2026-003','Vikram','Das','vikram.candidate@example.com','9000000008','1996-02-05','Pune','Maharashtra',4.0,900000,1200000,45,'PORTAL','Backend developer specializing in Java, Spring Boot and MySQL.','ACTIVE',2,8);
+
+INSERT INTO candidate_documents (document_id,candidate_id,document_type,file_name,file_path,is_current,verification_status,verified_by,verified_at,uploaded_by) VALUES
+(1,1,'RESUME','arjun_rao_resume.pdf','/demo/resumes/arjun_rao_resume.pdf',1,'VERIFIED',2,'2026-04-05 10:00:00',2),
+(2,2,'RESUME','sneha_iyer_resume.pdf','/demo/resumes/sneha_iyer_resume.pdf',1,'VERIFIED',3,'2026-04-05 10:30:00',3),
+(3,3,'RESUME','vikram_das_resume.pdf','/demo/resumes/vikram_das_resume.pdf',1,'PENDING',NULL,NULL,2);
+
+INSERT INTO candidate_education (education_id,candidate_id,qualification,specialization,institution,passing_year,grade_or_percentage) VALUES
+(1,1,'B.Tech','Computer Science','ABC Institute of Technology',2020,'78%'),
+(2,2,'B.Tech','Information Technology','XYZ Engineering College',2021,'8.1 CGPA'),
+(3,3,'MCA','Computer Applications','Pune Institute of Technology',2019,'8.4 CGPA');
+
+INSERT INTO candidate_experience (experience_id,candidate_id,employer_name,designation,start_date,end_date,is_current) VALUES
+(1,1,'CodeCraft Solutions','Java Developer','2023-01-01',NULL,1),
+(2,1,'WebNova Labs','Associate Developer','2021-07-01','2022-12-31',0),
+(3,2,'QualityFirst Systems','QA Automation Engineer','2024-01-01',NULL,1),
+(4,3,'DataBridge Technologies','Backend Developer','2022-01-01',NULL,1);
+
+INSERT INTO candidate_skills (candidate_id,skill_id,experience_years,proficiency) VALUES
+(1,1,3.0,'ADVANCED'),(1,2,2.0,'ADVANCED'),(1,3,1.5,'INTERMEDIATE'),(1,4,2.0,'INTERMEDIATE'),(1,5,2.5,'ADVANCED'),
+(2,8,2.0,'ADVANCED'),(2,5,1.5,'INTERMEDIATE'),(2,7,2.0,'INTERMEDIATE'),(2,1,0.5,'BEGINNER'),
+(3,1,4.0,'ADVANCED'),(3,2,3.0,'ADVANCED'),(3,4,3.0,'ADVANCED'),(3,5,3.0,'ADVANCED');
+
+-- 7. APPLICATIONS, SCREENING, SHORTLISTING, RESUME SHARING
+INSERT INTO applications (application_id,application_number,requirement_id,candidate_id,recruiter_id,status,source,rejection_reason) VALUES
+(1,'APP-2026-001',1,1,2,'SHORTLISTED','RECRUITER_ADDED',NULL),
+(2,'APP-2026-002',2,2,3,'INTERVIEW','RECRUITER_ADDED',NULL),
+(3,'APP-2026-003',3,3,2,'SELECTED','REFERRAL',NULL);
+
+INSERT INTO screenings (screening_id,application_id,screened_by,result,score,remarks) VALUES
+(1,1,2,'PASS',88.00,'Strong Java and Spring Boot fundamentals; suitable for customer interview.'),
+(2,2,3,'PASS',91.00,'Good Selenium automation and API testing experience.'),
+(3,3,2,'PASS',90.00,'Strong backend experience and relevant database skills.');
+
+INSERT INTO shortlists (shortlist_id,application_id,shortlisted_by,status,customer_decision_by,customer_decision_at) VALUES
+(1,1,2,'CUSTOMER_ACCEPTED',1,'2026-04-12 14:00:00'),
+(2,2,3,'SHORTLISTED',NULL,NULL),
+(3,3,2,'CUSTOMER_ACCEPTED',3,'2026-05-10 14:00:00');
+
+INSERT INTO resume_shares (share_id,application_id,shared_with_contact_id,document_id,shared_by,shared_at,access_expires_at,viewed_at,status) VALUES
+(1,1,1,1,2,'2026-04-10 10:00:00','2026-05-10 10:00:00','2026-04-10 11:30:00','VIEWED'),
+(2,2,1,2,3,'2026-04-11 10:00:00','2026-05-11 10:00:00',NULL,'SHARED'),
+(3,3,3,3,2,'2026-05-08 10:00:00','2026-06-08 10:00:00',NULL,'SHARED');
+
+-- 8. INTERVIEWS AND FEEDBACK
+INSERT INTO interviews (interview_id,application_id,round_number,interview_type,scheduled_start,scheduled_end,location_or_link,interviewer_user_id,status,created_by) VALUES
+(1,1,1,'VIDEO','2026-04-15 10:00:00','2026-04-15 11:00:00','https://meet.example.com/interview-001',4,'COMPLETED',2),
+(2,2,1,'VIDEO','2026-04-18 14:00:00','2026-04-18 15:00:00','https://meet.example.com/interview-002',4,'COMPLETED',3),
+(3,3,1,'VIDEO','2026-05-12 11:00:00','2026-05-12 12:00:00','https://meet.example.com/interview-003',4,'COMPLETED',2);
+
+INSERT INTO interview_feedback (feedback_id,interview_id,technical_rating,communication_rating,recommendation,feedback_text,entered_by) VALUES
+(1,1,4.5,4.0,'HIRE','Good problem-solving and practical Spring Boot knowledge.',4),
+(2,2,4.7,4.5,'STRONG_HIRE','Strong automation approach and clear communication.',4),
+(3,3,4.6,4.2,'STRONG_HIRE','Good backend design and SQL understanding.',4);
+
+-- 9. SELECTION, OFFERS, PLACEMENTS
+INSERT INTO selections (selection_id,application_id,agreed_ctc,expected_joining_date,customer_confirmation_ref,selected_by,notes) VALUES
+(1,1,900000,'2026-06-15','NST-SEL-2026-001',4,'Customer approved candidate for Java Full Stack Developer role under DTS payroll.');
+
+INSERT INTO offers (offer_id,selection_id,offer_reference,offered_ctc,offered_at,expires_at,proposed_joining_date,status,document_path,responded_at) VALUES
+(1,1,'OFFER-2026-001',900000,'2026-05-15 10:00:00','2026-05-25 23:59:00','2026-06-15','ACCEPTED','/demo/offers/offer_2026_001.pdf','2026-05-18 12:00:00');
+
+INSERT INTO placements (placement_id,selection_id,joining_date,evidence_type,evidence_path,confirmed_by_contact_id,confirmed_at,guarantee_end_date,outcome,notes) VALUES
+(1,1,'2026-06-15','JOINING_LETTER','/demo/placements/arjun_joining_letter.pdf',1,'2026-06-16 10:00:00','2026-09-13','JOINED','Joining confirmed by customer HR.');
+
+-- 10. EMPLOYEES, CONTRACTS, DEPLOYMENTS, ATTENDANCE
+INSERT INTO employees (employee_id,employee_code,candidate_id,date_of_joining,status) VALUES
+(1,'EMP-2026-001',1,'2026-06-15','ACTIVE');
+
+INSERT INTO employment_contracts (contract_id,employee_id,contract_number,contract_type,start_date,end_date,compensation_basis,gross_compensation,status,signed_date,document_path) VALUES
+(1,1,'EC-2026-001','PERMANENT','2026-06-15',NULL,'MONTHLY',100000,'ACTIVE','2026-06-10','/demo/contracts/ec_2026_001.pdf');
+
+INSERT INTO deployments (deployment_id,employee_id,selection_id,work_location,start_date,end_date,agreed_hours_per_week,customer_supervisor_contact_id,status) VALUES
+(1,1,1,'Noida - Hybrid','2026-06-15',NULL,40,1,'ACTIVE');
+
+INSERT INTO attendance (attendance_id,deployment_id,attendance_date,check_in,check_out,attendance_status,regular_hours,overtime_hours,approved_by,approved_at) VALUES
+(1,1,'2026-06-15','2026-06-15 09:30:00','2026-06-15 18:30:00','PRESENT',8.00,0.00,4,'2026-06-16 10:00:00'),
+(2,1,'2026-06-16','2026-06-16 09:25:00','2026-06-16 18:35:00','PRESENT',8.00,0.17,4,'2026-06-17 10:00:00');
+
+-- 11. INVOICES, ITEMS, PAYMENTS, ALLOCATIONS
+INSERT INTO invoices (invoice_id,invoice_number,service_order_id,invoice_type,invoice_date,due_date,service_period_start,service_period_end,subtotal,discount_amount,tax_total,total_amount,status,created_by) VALUES
+(1,'INV-2026-001',1,'PLACEMENT_FEE','2026-06-20','2026-07-20',NULL,NULL,72000.00,0.00,12960.00,84960.00,'DRAFT',1);
+
+-- Generated columns taxable_value, tax_amount and line_total are intentionally omitted.
+INSERT INTO invoice_items (item_id,invoice_id,deployment_id,placement_id,description,quantity,unit_price,tax_rate) VALUES
+(1,1,NULL,1,'Recruitment fee - Java Backend Developer placement',1.00,72000.00,18.00);
+
+-- Invoice lines are inserted while the invoice is DRAFT; issue it only after totals are validated.
+UPDATE invoices SET status = 'ISSUED' WHERE invoice_id = 1;
+
+INSERT INTO payments (payment_id,payment_reference,customer_id,payment_date,amount,payment_method,transaction_reference,status) VALUES
+(1,'PAY-2026-001',1,'2026-07-05',84960.00,'BANK_TRANSFER','UTR-DEMO-20260705-001','CLEARED');
+
+INSERT INTO payment_allocations (payment_id,invoice_id,allocated_amount) VALUES
+(1,1,84960.00);
+
+COMMIT;
+
+SELECT 'users' AS table_name, COUNT(*) AS row_count FROM users
+UNION ALL SELECT 'customers', COUNT(*) FROM customers
+UNION ALL SELECT 'customer_addresses', COUNT(*) FROM customer_addresses
+UNION ALL SELECT 'customer_contacts', COUNT(*) FROM customer_contacts
+UNION ALL SELECT 'skills', COUNT(*) FROM skills
+UNION ALL SELECT 'service_types', COUNT(*) FROM service_types
+UNION ALL SELECT 'job_profiles', COUNT(*) FROM job_profiles
+UNION ALL SELECT 'job_profile_skills', COUNT(*) FROM job_profile_skills
+UNION ALL SELECT 'agreements', COUNT(*) FROM agreements
+UNION ALL SELECT 'rate_cards', COUNT(*) FROM rate_cards
+UNION ALL SELECT 'service_orders', COUNT(*) FROM service_orders
+UNION ALL SELECT 'job_requirements', COUNT(*) FROM job_requirements
+UNION ALL SELECT 'requirement_assignments', COUNT(*) FROM requirement_assignments
+UNION ALL SELECT 'job_requirement_skills', COUNT(*) FROM job_requirement_skills
+UNION ALL SELECT 'candidates', COUNT(*) FROM candidates
+UNION ALL SELECT 'candidate_documents', COUNT(*) FROM candidate_documents
+UNION ALL SELECT 'candidate_education', COUNT(*) FROM candidate_education
+UNION ALL SELECT 'candidate_experience', COUNT(*) FROM candidate_experience
+UNION ALL SELECT 'candidate_skills', COUNT(*) FROM candidate_skills
+UNION ALL SELECT 'applications', COUNT(*) FROM applications
+UNION ALL SELECT 'screenings', COUNT(*) FROM screenings
+UNION ALL SELECT 'shortlists', COUNT(*) FROM shortlists
+UNION ALL SELECT 'resume_shares', COUNT(*) FROM resume_shares
+UNION ALL SELECT 'interviews', COUNT(*) FROM interviews
+UNION ALL SELECT 'interview_feedback', COUNT(*) FROM interview_feedback
+UNION ALL SELECT 'selections', COUNT(*) FROM selections
+UNION ALL SELECT 'offers', COUNT(*) FROM offers
+UNION ALL SELECT 'placements', COUNT(*) FROM placements
+UNION ALL SELECT 'employees', COUNT(*) FROM employees
+UNION ALL SELECT 'employment_contracts', COUNT(*) FROM employment_contracts
+UNION ALL SELECT 'deployments', COUNT(*) FROM deployments
+UNION ALL SELECT 'attendance', COUNT(*) FROM attendance
+UNION ALL SELECT 'invoices', COUNT(*) FROM invoices
+UNION ALL SELECT 'invoice_items', COUNT(*) FROM invoice_items
+UNION ALL SELECT 'payments', COUNT(*) FROM payments
+UNION ALL SELECT 'payment_allocations', COUNT(*) FROM payment_allocations
+ORDER BY table_name;
+
+-- UPDATE applications
+-- SET status = 'SELECTED'
+-- WHERE application_id = 1
+--   AND status = 'SHORTLISTED'
+--   AND EXISTS (
+--     SELECT 1
+--     FROM selections
+--     WHERE selections.application_id = applications.application_id
+--   );
+
+USE dts_recruitment;
+DELIMITER $$
+DROP TRIGGER IF EXISTS trg_invoice_items_bu$$
+UPDATE invoice_items
+   SET description = 'Recruitment fee - Java Full Stack Developer placement (Arjun Rao)'
+ WHERE item_id = 1$$
+CREATE TRIGGER trg_invoice_items_bu BEFORE UPDATE ON invoice_items FOR EACH ROW
+BEGIN CALL sp_check_invoice_item(NEW.invoice_id, NEW.deployment_id, NEW.placement_id); END$$
+DELIMITER ;
+
+
+USE dts_recruitment;
+SET NAMES utf8mb4;
+SET time_zone = '+00:00';
+START TRANSACTION;
+
+
+/* ===========================================================================
+   PART A - CORRECTIONS TO THE EXISTING DEMO ROWS
+   =========================================================================== */
+
+/* A1. Pipeline status/decision consistency ---------------------------------- */
+UPDATE applications SET status = 'SELECTED' WHERE application_id = 1;
+UPDATE shortlists   SET status = 'CUSTOMER_ACCEPTED', customer_decision_by = 1, customer_decision_at = '2026-04-14 11:00:00' WHERE shortlist_id = 2;
+UPDATE resume_shares SET status = 'VIEWED', viewed_at = '2026-04-11 15:20:00' WHERE share_id = 2;
+UPDATE resume_shares SET status = 'VIEWED', viewed_at = '2026-05-08 16:40:00' WHERE share_id = 3;
+
+/* A2. Requirement 3 / service order 2 must be live (application 3 already exists) */
+UPDATE service_orders  SET status = 'IN_PROGRESS' WHERE service_order_id = 2;
+UPDATE job_requirements SET status = 'OPEN', published_at = '2026-05-03 09:00:00' WHERE requirement_id = 3;
+
+/* A3. Wrong person in a role ------------------------------------------------- */
+UPDATE interviews          SET interviewer_user_id = 9 WHERE interview_id = 3;   /* customer 2's own hiring contact */
+UPDATE interview_feedback  SET entered_by = 9 WHERE feedback_id = 3;
+UPDATE selections          SET selected_by = 2 WHERE selection_id = 1;          /* DTS recruiter owning application 1 */
+
+/* A4. Numbers that contradicted each other ------------------------------------ */
+UPDATE employment_contracts SET gross_compensation = 75000.00 WHERE contract_id = 1;   /* = agreed CTC 900000 / 12 */
+UPDATE placements SET outcome = 'CONFIRMED', notes = 'Joining confirmed by customer HR; guarantee period completed.' WHERE placement_id = 1;
+UPDATE candidates SET total_experience_years = 3.8 WHERE candidate_id = 1;
+UPDATE candidates SET total_experience_years = 2.3 WHERE candidate_id = 2;
+UPDATE candidates SET total_experience_years = 4.3 WHERE candidate_id = 3;
+UPDATE candidate_experience SET start_date = '2022-07-01' WHERE experience_id = 2;
+
+/* A5. Realistic names / valid GSTIN check digits / verified resume --------------- */
+UPDATE candidate_education SET institution = 'Northern Institute of Technology' WHERE education_id = 1;
+UPDATE candidate_education SET institution = 'Western Engineering College'      WHERE education_id = 2;
+UPDATE customers SET gstin = '07AABCN1234F1ZY' WHERE customer_id = 1;
+UPDATE customers SET gstin = '27AABCB5678G1ZI' WHERE customer_id = 2;
+UPDATE candidate_documents SET verification_status = 'VERIFIED', verified_by = 2, verified_at = '2026-05-06 12:00:00' WHERE document_id = 3;
+
+/* A6. Timestamps: columns left out of the original inserts defaulted to the load time,
+       which put every event AFTER the events that depend on it. Re-dated to the real timeline. */
+UPDATE users SET created_at = '2025-12-01 09:00:00', updated_at = '2025-12-01 09:00:00', last_login_at = '2026-11-18 09:40:00' WHERE user_id = 1;
+UPDATE users SET created_at = '2025-12-01 09:10:00', updated_at = '2025-12-01 09:10:00', last_login_at = '2026-11-18 10:05:00' WHERE user_id IN (2, 3);
+UPDATE users SET created_at = '2025-12-18 10:00:00', updated_at = '2025-12-18 10:00:00', last_login_at = '2026-11-17 15:30:00' WHERE user_id IN (4, 5);
+UPDATE users SET created_at = '2026-01-20 10:00:00', updated_at = '2026-01-20 10:00:00', last_login_at = '2026-11-16 12:10:00' WHERE user_id = 9;
+UPDATE users SET created_at = '2026-04-04 09:30:00', updated_at = '2026-04-04 09:30:00', last_login_at = '2026-11-12 18:00:00' WHERE user_id = 6;
+UPDATE users SET created_at = '2026-04-04 11:00:00', updated_at = '2026-04-04 11:00:00', last_login_at = '2026-11-10 20:15:00' WHERE user_id = 7;
+UPDATE users SET created_at = '2026-05-05 09:30:00', updated_at = '2026-05-05 09:30:00', last_login_at = '2026-11-14 08:45:00' WHERE user_id = 8;
+UPDATE customers SET created_at = '2025-12-10 10:00:00' WHERE customer_id = 1;
+UPDATE customers SET created_at = '2024-11-15 10:00:00' WHERE customer_id = 2;
+UPDATE job_profiles SET created_at = '2025-12-05 10:00:00' WHERE job_profile_id IN (1, 2);
+UPDATE agreements SET created_at = '2025-12-15 10:00:00' WHERE agreement_id = 1;
+UPDATE agreements SET created_at = '2026-01-20 10:00:00' WHERE agreement_id = 2;
+UPDATE service_orders SET created_at = '2026-03-20 10:00:00' WHERE service_order_id = 1;
+UPDATE service_orders SET created_at = '2026-04-15 10:00:00' WHERE service_order_id = 2;
+UPDATE job_requirements SET created_at = '2026-03-30 10:00:00' WHERE requirement_id IN (1, 2);
+UPDATE job_requirements SET created_at = '2026-04-28 10:00:00' WHERE requirement_id = 3;
+UPDATE requirement_assignments SET assigned_at = '2026-04-03 10:00:00' WHERE assignment_id IN (1, 2);
+UPDATE requirement_assignments SET assigned_at = '2026-04-03 10:30:00' WHERE assignment_id = 3;
+UPDATE requirement_assignments SET assigned_at = '2026-05-03 10:00:00' WHERE assignment_id = 4;
+UPDATE candidates SET status = 'PLACED', created_at = '2026-04-04 09:30:00', updated_at = '2026-06-20 10:00:00' WHERE candidate_id = 1;
+UPDATE candidates SET created_at = '2026-04-04 11:00:00', updated_at = '2026-04-18 16:30:00' WHERE candidate_id = 2;
+UPDATE candidates SET status = 'PLACED', created_at = '2026-05-05 09:30:00', updated_at = '2026-07-07 10:00:00' WHERE candidate_id = 3;
+UPDATE candidate_documents SET uploaded_at = '2026-04-04 09:45:00' WHERE document_id = 1;
+UPDATE candidate_documents SET uploaded_at = '2026-04-04 11:15:00' WHERE document_id = 2;
+UPDATE candidate_documents SET uploaded_at = '2026-05-05 09:45:00' WHERE document_id = 3;
+UPDATE applications SET applied_at = '2026-04-06 09:15:00' WHERE application_id = 1;
+UPDATE applications SET applied_at = '2026-04-07 10:20:00' WHERE application_id = 2;
+UPDATE applications SET applied_at = '2026-05-05 10:30:00' WHERE application_id = 3;
+UPDATE screenings SET screened_at = '2026-04-07 11:00:00' WHERE screening_id = 1;
+UPDATE screenings SET screened_at = '2026-04-08 11:30:00' WHERE screening_id = 2;
+UPDATE screenings SET screened_at = '2026-05-06 11:00:00' WHERE screening_id = 3;
+UPDATE shortlists SET shortlisted_at = '2026-04-09 15:00:00' WHERE shortlist_id = 1;
+UPDATE shortlists SET shortlisted_at = '2026-04-09 16:00:00' WHERE shortlist_id = 2;
+UPDATE shortlists SET shortlisted_at = '2026-05-07 15:00:00' WHERE shortlist_id = 3;
+UPDATE interviews SET created_at = '2026-04-13 10:00:00' WHERE interview_id = 1;
+UPDATE interviews SET created_at = '2026-04-15 10:00:00' WHERE interview_id = 2;
+UPDATE interviews SET created_at = '2026-05-10 15:00:00' WHERE interview_id = 3;
+UPDATE interview_feedback SET submitted_at = '2026-04-15 12:30:00' WHERE feedback_id = 1;
+UPDATE interview_feedback SET submitted_at = '2026-04-18 16:30:00' WHERE feedback_id = 2;
+UPDATE interview_feedback SET submitted_at = '2026-05-12 13:30:00' WHERE feedback_id = 3;
+UPDATE selections SET selected_at = '2026-05-12 11:00:00' WHERE selection_id = 1;
+UPDATE employees SET created_at = '2026-06-10 10:00:00' WHERE employee_id = 1;
+UPDATE deployments SET created_at = '2026-06-10 10:30:00' WHERE deployment_id = 1;
+UPDATE invoices SET created_at = '2026-06-20 10:00:00' WHERE invoice_id = 1;
+UPDATE payments SET created_at = '2026-07-05 12:00:00' WHERE payment_id = 1;
+
+/* A7. Finish application 3 (it was SELECTED with no selection): customer-payroll hire for BluePeak.
+       Fee = 6% of annual CTC per rate card 3 -> 6% x 1,150,000 = 69,000 + 18% GST = 81,420.            */
+INSERT INTO selections (selection_id,application_id,agreed_ctc,expected_joining_date,customer_confirmation_ref,selected_by,selected_at,notes) VALUES
+(2,3,1150000,'2026-07-06','BPA-SEL-2026-001',2,'2026-05-15 10:00:00','Customer approved candidate for Java Backend Developer role (customer payroll).');
+INSERT INTO offers (offer_id,selection_id,offer_reference,offered_ctc,offered_at,expires_at,proposed_joining_date,status,document_path,responded_at) VALUES
+(2,2,'OFFER-2026-002',1150000,'2026-05-20 10:00:00','2026-05-30 23:59:00','2026-07-06','ACCEPTED','/demo/offers/offer_2026_002.pdf','2026-05-23 15:00:00');
+INSERT INTO placements (placement_id,selection_id,joining_date,evidence_type,evidence_path,confirmed_by_contact_id,confirmed_at,guarantee_end_date,outcome,notes) VALUES
+(2,2,'2026-07-06','JOINING_LETTER','/demo/placements/vikram_joining_letter.pdf',3,'2026-07-07 10:00:00','2026-10-04','CONFIRMED','Joining confirmed by customer HR; guarantee period completed.');
+INSERT INTO invoices (invoice_id,invoice_number,service_order_id,invoice_type,invoice_date,due_date,service_period_start,service_period_end,subtotal,discount_amount,tax_total,total_amount,status,created_by,created_at) VALUES
+(2,'INV-2026-002',2,'PLACEMENT_FEE','2026-07-10','2026-08-24',NULL,NULL,69000.00,0.00,12420.00,81420.00,'DRAFT',1,'2026-07-10 10:00:00');
+INSERT INTO invoice_items (item_id,invoice_id,deployment_id,placement_id,description,quantity,unit_price,tax_rate) VALUES
+(2,2,NULL,2,'Recruitment fee - Java Backend Developer placement (Vikram Das)',1.00,69000.00,18.00);
+UPDATE invoices SET status = 'ISSUED' WHERE invoice_id = 2;
+INSERT INTO payments (payment_id,payment_reference,customer_id,payment_date,amount,payment_method,transaction_reference,status,created_at) VALUES
+(2,'PAY-2026-002',2,'2026-08-18',40710.00,'BANK_TRANSFER','UTR-DEMO-20260818-002','CLEARED','2026-08-18 11:00:00');
+INSERT INTO payment_allocations (payment_id,invoice_id,allocated_amount) VALUES
+(2,2,40710.00);
+
+
+/* ===========================================================================
+   PART B - ADDITIONAL SHOWCASE DATA
+   =========================================================================== */
+
+/* ---- users (11 rows) ---- */
+INSERT INTO users (user_id, full_name, email, mobile, password_hash, role, status, created_at, updated_at, last_login_at) VALUES
+  (10, 'Rohit Bansal', 'rohit.recruiter@example.com', '9000000010', NULL, 'RECRUITER', 'ACTIVE', '2025-12-01 12:21:00', '2025-12-01 09:03:00', '2026-11-13 17:56:00'),
+  (11, 'Meenal Joshi', 'meenal.hiring@example.com', '9000000011', NULL, 'CUSTOMER', 'ACTIVE', '2026-02-20 09:07:00', '2026-02-20 10:22:00', '2026-11-05 17:20:00'),
+  (12, 'Sandeep Kulkarni', 'sandeep.billing@example.com', '9000000012', NULL, 'CUSTOMER', 'ACTIVE', '2026-02-20 12:44:00', '2026-02-20 11:39:00', '2026-11-09 13:49:00'),
+  (13, 'Farhan Qureshi', 'farhan.hiring@example.com', '9000000013', NULL, 'CUSTOMER', 'ACTIVE', '2026-04-20 09:14:00', '2026-04-20 13:00:00', '2026-11-19 13:54:00'),
+  (14, 'Divya Menon', 'divya.billing@example.com', '9000000014', NULL, 'CUSTOMER', 'ACTIVE', '2026-04-20 17:39:00', '2026-04-20 11:13:00', '2026-11-02 14:30:00'),
+  (15, 'Rohan Kulkarni', 'rohan.kulkarni@example.com', '9000001004', NULL, 'CANDIDATE', 'ACTIVE', '2026-04-06 09:07:00', '2026-04-06 14:23:00', '2026-11-03 10:09:00'),
+  (16, 'Ishita Nair', 'ishita.nair@example.com', '9000001005', NULL, 'CANDIDATE', 'ACTIVE', '2026-10-24 13:03:00', '2026-10-24 09:11:00', '2026-11-08 09:32:00'),
+  (17, 'Mohit Saxena', 'mohit.saxena@example.com', '9000001006', NULL, 'CANDIDATE', 'ACTIVE', '2026-11-02 16:48:00', '2026-11-02 14:32:00', '2026-11-10 15:49:00'),
+  (18, 'Aditi Menon', 'aditi.menon@example.com', '9000001007', NULL, 'CANDIDATE', 'ACTIVE', '2026-05-12 11:14:00', '2026-05-12 10:51:00', '2026-11-18 15:42:00'),
+  (19, 'Karthik Reddy', 'karthik.reddy@example.com', '9000001008', NULL, 'CANDIDATE', 'ACTIVE', '2026-05-16 16:51:00', '2026-05-16 09:16:00', '2026-11-18 15:56:00'),
+  (20, 'Pooja Bhatt', 'pooja.bhatt@example.com', '9000001009', NULL, 'CANDIDATE', 'INVITED', '2026-04-12 17:07:00', '2026-04-12 09:58:00', NULL);
+
+/* ---- customers (3 rows) ---- */
+INSERT INTO customers (customer_id, customer_code, company_name, gstin, pan, industry, payment_terms_days, status, account_owner_id, created_at) VALUES
+  (3, 'CUS-003', 'Orbit Cloud Services Pvt Ltd', '29AAGCO4412K1Z9', 'AAGCO4412K', 'Cloud & Platform Services', 30, 'ACTIVE', 10, '2026-02-12 16:45:00'),
+  (4, 'CUS-004', 'Zenith Health Informatics Pvt Ltd', '36AAHCZ7721P1ZI', 'AAHCZ7721P', 'Healthcare IT', 45, 'ACTIVE', 1, '2026-04-14 17:45:00'),
+  (5, 'CUS-005', 'Lumina Retail Tech Pvt Ltd', NULL, NULL, 'Retail Technology', 30, 'PROSPECT', 2, '2026-11-03 12:54:00');
+
+/* ---- customer_addresses (7 rows) ---- */
+INSERT INTO customer_addresses (address_id, customer_id, address_type, address_line, city, state, postal_code, is_primary) VALUES
+  (5, 3, 'REGISTERED', 'Tower 3, Embassy Tech Village, Outer Ring Road', 'Bengaluru', 'Karnataka', '560103', 1),
+  (6, 3, 'BILLING', 'Tower 3, Embassy Tech Village, Outer Ring Road', 'Bengaluru', 'Karnataka', '560103', 1),
+  (7, 3, 'SITE', 'Plot 8, Whitefield Industrial Area', 'Bengaluru', 'Karnataka', '560066', 1),
+  (8, 4, 'REGISTERED', 'Level 6, Cyber Towers, HITEC City', 'Hyderabad', 'Telangana', '500081', 1),
+  (9, 4, 'BILLING', 'Level 6, Cyber Towers, HITEC City', 'Hyderabad', 'Telangana', '500081', 1),
+  (10, 4, 'SITE', 'Survey 21, Gachibowli', 'Hyderabad', 'Telangana', '500032', 1),
+  (11, 5, 'REGISTERED', 'Block C, Okhla Phase 3', 'New Delhi', 'Delhi', '110020', 1);
+
+/* ---- customer_contacts (4 rows) ---- */
+INSERT INTO customer_contacts (contact_id, customer_id, user_id, designation, contact_type, is_primary, status) VALUES
+  (4, 3, 11, 'Head of Engineering Hiring', 'HIRING', 1, 'ACTIVE'),
+  (5, 3, 12, 'Finance Controller', 'BILLING', 0, 'ACTIVE'),
+  (6, 4, 13, 'Talent Acquisition Lead', 'HIRING', 1, 'ACTIVE'),
+  (7, 4, 14, 'Accounts Manager', 'BILLING', 0, 'ACTIVE');
+
+/* ---- skills (10 rows) ---- */
+INSERT INTO skills (skill_id, skill_name, skill_category) VALUES
+  (10, 'Docker', 'DevOps'),
+  (11, 'AWS', 'Cloud'),
+  (12, 'Kubernetes', 'DevOps'),
+  (13, 'CI/CD', 'DevOps'),
+  (14, 'Power BI', 'Data & Analytics'),
+  (15, 'Tableau', 'Data & Analytics'),
+  (16, 'Data Analysis', 'Data & Analytics'),
+  (17, 'Git', 'Engineering Practices'),
+  (18, 'TypeScript', 'Frontend'),
+  (19, 'Node.js', 'Backend');
+
+/* ---- job_profiles (4 rows) ---- */
+INSERT INTO job_profiles (job_profile_id, profile_code, profile_name, category, purpose, key_responsibilities, qualifications, reporting_to, default_experience_min, default_experience_max, status, created_by, created_at) VALUES
+  (3, 'JP-DATA-AN', 'Data Analyst', 'Data & Analytics', 'Convert business data into dashboards and decisions.', 'Write SQL; build Power BI/Tableau dashboards; clean datasets; present insights to stakeholders.', 'Graduate in a quantitative field; SQL and BI tool experience.', 'Analytics Manager', 1.0, 5.0, 'ACTIVE', 1, '2026-01-10 09:16:00'),
+  (4, 'JP-DEVOPS', 'DevOps Engineer', 'Cloud & Infrastructure', 'Automate build, release and infrastructure operations.', 'Maintain CI/CD pipelines; manage AWS infrastructure; containerise services; monitor reliability.', 'B.Tech or equivalent; AWS/Docker experience.', 'Head of Platform', 3.0, 8.0, 'ACTIVE', 1, '2026-01-10 16:23:00'),
+  (5, 'JP-PY-DEV', 'Python Backend Developer', 'Software Development', 'Build and maintain Python backend services.', 'Develop REST APIs; optimise SQL queries; write unit tests; support deployments.', 'B.Tech/MCA; Python, REST and SQL.', 'Engineering Manager', 2.0, 6.0, 'ACTIVE', 1, '2026-01-10 09:17:00'),
+  (6, 'JP-BA', 'Business Analyst', 'Business Analysis', 'Bridge business needs and technology teams.', 'Gather requirements; write user stories; coordinate UAT.', 'Graduate; MBA preferred.', 'Product Manager', 2.0, 7.0, 'DRAFT', 1, '2026-01-10 09:43:00');
+
+/* ---- job_profile_skills (17 rows) ---- */
+INSERT INTO job_profile_skills (job_profile_id, skill_id, is_mandatory, min_experience_years) VALUES
+  (3, 7, 1, 1.0),
+  (3, 14, 1, 1.0),
+  (3, 16, 1, 1.0),
+  (3, 15, 0, NULL),
+  (3, 6, 0, NULL),
+  (4, 11, 1, 2.0),
+  (4, 10, 1, 2.0),
+  (4, 13, 1, 2.0),
+  (4, 12, 0, 1.0),
+  (4, 17, 1, 1.0),
+  (5, 6, 1, 2.0),
+  (5, 5, 1, 1.0),
+  (5, 7, 1, 1.0),
+  (5, 10, 0, NULL),
+  (5, 17, 1, NULL),
+  (6, 7, 1, 1.0),
+  (6, 16, 0, NULL);
+
+/* ---- agreements (5 rows) ---- */
+INSERT INTO agreements (agreement_id, agreement_number, customer_id, title, status, effective_date, expiry_date, signed_date, auto_renew, document_path, created_by, created_at) VALUES
+  (3, 'AGR-2026-003', 3, 'Cloud and Data Talent Services Agreement', 'ACTIVE', '2026-03-01', '2027-02-28', '2026-02-22', 1, '/demo/agreements/AGR-2026-003.pdf', 1, '2026-02-15 11:46:00'),
+  (4, 'AGR-2026-004', 4, 'Health Analytics Recruitment Agreement', 'ACTIVE', '2026-05-01', '2027-04-30', '2026-04-24', 0, '/demo/agreements/AGR-2026-004.pdf', 1, '2026-04-16 13:01:00'),
+  (5, 'AGR-2026-005', 5, 'Master Services Agreement (Draft)', 'DRAFT', NULL, NULL, NULL, 0, NULL, 1, '2026-11-05 16:32:00'),
+  (6, 'AGR-2025-006', 2, 'Engineering Hiring Agreement 2025', 'EXPIRED', '2025-01-01', '2025-12-31', '2024-12-20', 0, '/demo/agreements/AGR-2025-006.pdf', 1, '2024-12-10 14:19:00'),
+  (7, 'AGR-2026-007', 1, 'Contract Staffing Addendum', 'PENDING_SIGNATURE', '2027-01-01', '2027-12-31', NULL, 0, '/demo/agreements/AGR-2026-007.pdf', 1, '2026-11-08 17:35:00');
+
+/* ---- rate_cards (6 rows) ---- */
+INSERT INTO rate_cards (rate_card_id, agreement_id, service_type_id, job_profile_id, fee_type, fee_basis, fee_value, billing_frequency, replacement_days, effective_from, effective_to) VALUES
+  (4, 3, 1, 4, 'PERCENTAGE', 'MONTHLY_SALARY', 12.00, 'MONTHLY', 30, '2026-03-01', NULL),
+  (5, 3, 1, 5, 'PERCENTAGE', 'MONTHLY_SALARY', 12.00, 'MONTHLY', 30, '2026-03-01', NULL),
+  (6, 3, 3, 3, 'PERCENTAGE', 'ANNUAL_CTC', 8.33, 'ONE_TIME', 90, '2026-03-01', NULL),
+  (7, 4, 3, 3, 'FIXED_AMOUNT', 'PER_PLACEMENT', 60000.00, 'ONE_TIME', 60, '2026-05-01', NULL),
+  (8, 4, 3, 5, 'PERCENTAGE', 'ANNUAL_CTC', 8.33, 'ONE_TIME', 90, '2026-05-01', NULL),
+  (9, 6, 3, 1, 'PERCENTAGE', 'ANNUAL_CTC', 7.00, 'ONE_TIME', 60, '2025-01-01', '2025-12-31');
+
+/* ---- service_orders (6 rows) ---- */
+INSERT INTO service_orders (service_order_id, order_number, agreement_id, service_type_id, customer_reference, title, scope_description, start_date, end_date, status, approved_by, approved_at, created_at) VALUES
+  (3, 'SO-2026-003', 3, 1, 'ORB-PO-3101', 'Cloud platform contract staffing', 'DTS-payroll DevOps and Python engineers deployed at Orbit.', '2026-03-15', '2027-02-28', 'IN_PROGRESS', 1, '2026-03-10 11:00:00', '2026-03-08 10:00:00'),
+  (4, 'SO-2026-004', 3, 3, 'ORB-PO-3102', 'Data team permanent hiring', 'Customer-payroll hiring of data analysts.', '2026-04-01', '2026-12-31', 'IN_PROGRESS', 1, '2026-03-28 12:00:00', '2026-03-26 10:00:00'),
+  (5, 'SO-2026-005', 4, 3, 'ZHI-TA-007', 'Health analytics hiring', 'Customer-payroll hiring for healthcare analytics roles.', '2026-05-10', '2027-04-30', 'IN_PROGRESS', 1, '2026-05-06 12:00:00', '2026-05-04 10:00:00'),
+  (6, 'SO-2026-006', 4, 3, NULL, 'Clinical informatics hiring (draft)', 'Scope under discussion.', NULL, NULL, 'DRAFT', NULL, NULL, '2026-11-12 10:00:00'),
+  (7, 'SO-2025-007', 6, 3, 'BPA-TA-2025-01', 'Engineering hiring 2025', 'Completed 2025 engagement.', '2025-02-01', '2025-12-31', 'COMPLETED', 1, '2025-01-20 12:00:00', '2025-01-18 10:00:00'),
+  (8, 'SO-2026-008', 3, 1, 'ORB-PO-3190', 'Platform expansion staffing', 'Awaiting approval.', '2027-01-01', '2027-02-28', 'PENDING_APPROVAL', NULL, NULL, '2026-11-10 10:00:00');
+
+/* ---- job_requirements (9 rows) ---- */
+INSERT INTO job_requirements (requirement_id, requirement_number, service_order_id, job_profile_id, raised_by_user_id, job_title, job_description, headcount, work_mode, work_location, experience_min_years, experience_max_years, salary_min, salary_max, employment_schedule, hours_per_week, target_join_date, status, approved_by, approved_at, published_at, created_at) VALUES
+  (4, 'REQ-2026-004', 3, 4, 11, 'DevOps Engineer', 'DevOps Engineer position. Duties include delivering features, collaborating with the customer team and meeting quality standards.', 2, 'HYBRID', 'Bengaluru', 3, 7, 1200000, 2000000, 'FULL_TIME', 40, '2026-06-05', 'OPEN', 1, '2026-04-04 09:03:00', '2026-04-06 09:03:00', '2026-04-01 09:03:00'),
+  (5, 'REQ-2026-005', 3, 5, 11, 'Python Developer', 'Python Developer position. Duties include delivering features, collaborating with the customer team and meeting quality standards.', 1, 'REMOTE', 'Bengaluru', 2, 5, 900000, 1500000, 'FULL_TIME', 40, '2026-07-11', 'FILLED', 1, '2026-05-10 09:14:00', '2026-05-12 09:14:00', '2026-05-07 09:14:00'),
+  (6, 'REQ-2026-006', 4, 3, 11, 'Data Analyst', 'Data Analyst position. Duties include delivering features, collaborating with the customer team and meeting quality standards.', 1, 'HYBRID', 'Bengaluru', 2, 5, 600000, 1100000, 'FULL_TIME', 40, '2026-06-19', 'FILLED', 1, '2026-04-18 09:30:00', '2026-04-20 09:30:00', '2026-04-15 09:30:00'),
+  (7, 'REQ-2026-007', 5, 3, 13, 'Healthcare Data Analyst', 'Healthcare Data Analyst position. Duties include delivering features, collaborating with the customer team and meeting quality standards.', 2, 'ONSITE', 'Hyderabad', 1, 4, 500000, 900000, 'FULL_TIME', 40, '2026-07-24', 'OPEN', 1, '2026-05-23 09:59:00', '2026-05-25 09:59:00', '2026-05-20 09:59:00'),
+  (8, 'REQ-2026-008', 5, 5, 13, 'Python Backend Engineer', 'Python Backend Engineer position. Duties include delivering features, collaborating with the customer team and meeting quality standards.', 1, 'HYBRID', 'Hyderabad', 3, 6, 1000000, 1600000, 'FULL_TIME', 40, '2026-11-09', 'ON_HOLD', 1, '2026-09-08 09:20:00', '2026-09-10 09:20:00', '2026-09-05 09:20:00'),
+  (9, 'REQ-2026-009', 8, 4, 11, 'Site Reliability Engineer', 'Site Reliability Engineer position. Duties include delivering features, collaborating with the customer team and meeting quality standards.', 1, 'HYBRID', 'Bengaluru', 4, 8, 1600000, 2400000, 'FULL_TIME', 40, NULL, 'PENDING_APPROVAL', NULL, NULL, NULL, '2026-11-10 15:00:00'),
+  (10, 'REQ-2026-010', 4, 3, 11, 'Senior Data Analyst', 'Senior Data Analyst position. Duties include delivering features, collaborating with the customer team and meeting quality standards.', 1, 'ONSITE', 'Bengaluru', 4, 8, 1200000, 1800000, 'FULL_TIME', 40, NULL, 'CANCELLED', 1, '2026-10-02 09:08:00', NULL, '2026-06-02 17:20:00'),
+  (11, 'REQ-2025-011', 7, 1, 9, 'Java Developer', 'Java Developer position. Duties include delivering features, collaborating with the customer team and meeting quality standards.', 2, 'ONSITE', 'Pune', 2, 5, 700000, 1300000, 'FULL_TIME', 40, '2025-04-30', 'CLOSED', 1, '2025-02-27 09:13:00', '2025-03-01 09:13:00', '2025-02-24 09:13:00'),
+  (12, 'REQ-2026-012', 6, 5, 13, 'Clinical Data Engineer', 'Clinical Data Engineer position. Duties include delivering features, collaborating with the customer team and meeting quality standards.', 1, 'HYBRID', 'Hyderabad', 3, 6, 1200000, 1800000, 'FULL_TIME', 40, NULL, 'DRAFT', NULL, NULL, NULL, '2026-11-10 13:05:00');
+
+/* ---- requirement_assignments (8 rows) ---- */
+INSERT INTO requirement_assignments (assignment_id, requirement_id, recruiter_id, assignment_role, assigned_at) VALUES
+  (5, 4, 10, 'LEAD', '2026-04-05 15:50:00'),
+  (6, 4, 3, 'SUPPORT', '2026-04-06 15:50:00'),
+  (7, 5, 10, 'LEAD', '2026-05-11 16:54:00'),
+  (8, 6, 3, 'LEAD', '2026-04-19 12:33:00'),
+  (9, 7, 2, 'LEAD', '2026-05-24 13:02:00'),
+  (10, 7, 3, 'SUPPORT', '2026-05-25 13:02:00'),
+  (11, 8, 10, 'LEAD', '2026-09-09 12:22:00'),
+  (12, 11, 3, 'LEAD', '2025-02-28 09:05:00');
+
+/* ---- job_requirement_skills (26 rows) ---- */
+INSERT INTO job_requirement_skills (requirement_id, skill_id, is_mandatory, min_experience_years) VALUES
+  (4, 11, 1, 1.0),
+  (4, 10, 1, 1.0),
+  (4, 13, 0, NULL),
+  (4, 12, 0, NULL),
+  (5, 6, 1, 1.0),
+  (5, 5, 1, 1.0),
+  (5, 7, 0, NULL),
+  (6, 7, 1, 1.0),
+  (6, 14, 1, 1.0),
+  (6, 16, 0, NULL),
+  (7, 7, 1, 1.0),
+  (7, 15, 1, 1.0),
+  (7, 16, 0, NULL),
+  (8, 6, 1, 1.0),
+  (8, 5, 1, 1.0),
+  (8, 10, 0, NULL),
+  (9, 11, 1, 1.0),
+  (9, 12, 1, 1.0),
+  (9, 13, 0, NULL),
+  (10, 7, 1, 1.0),
+  (10, 14, 1, 1.0),
+  (11, 1, 1, 1.0),
+  (11, 2, 1, 1.0),
+  (11, 4, 0, NULL),
+  (12, 6, 1, 1.0),
+  (12, 7, 1, 1.0);
+
+/* ---- candidates (18 rows) ---- */
+INSERT INTO candidates (candidate_id, candidate_code, first_name, last_name, email, mobile, date_of_birth, current_city, current_state, total_experience_years, current_ctc, expected_ctc, notice_period_days, source, profile_summary, status, created_at, updated_at, created_by, user_id) VALUES
+  (4, 'CAN-2026-004', 'Rohan', 'Kulkarni', 'rohan.kulkarni@example.com', '9000001004', '1997-05-19', 'Bengaluru', 'Karnataka', 5.2, 1598000, 1996000, 30, 'REFERRAL', '5.2-year DevOps engineer with hands-on experience in Python, Kubernetes, Docker.', 'PLACED', '2026-04-06 16:11:00', '2026-04-07 16:11:00', 2, 15),
+  (5, 'CAN-2026-005', 'Ishita', 'Nair', 'ishita.nair@example.com', '9000001005', '1998-04-09', 'Bengaluru', 'Karnataka', 4.1, 1373000, 1696000, 60, 'PORTAL', '4.1-year DevOps engineer with hands-on experience in Docker, Python, Git.', 'ACTIVE', '2026-10-24 16:08:00', '2026-10-25 16:08:00', NULL, 16),
+  (6, 'CAN-2026-006', 'Mohit', 'Saxena', 'mohit.saxena@example.com', '9000001006', '1996-10-23', 'Hyderabad', 'Telangana', 6.0, 1870000, 2501000, 60, 'JOB_BOARD', '6.0-year DevOps engineer with hands-on experience in Kubernetes, Git, CI/CD.', 'ACTIVE', '2026-11-02 16:30:00', '2026-11-03 16:30:00', 2, 17),
+  (7, 'CAN-2026-007', 'Aditi', 'Menon', 'aditi.menon@example.com', '9000001007', '2001-11-15', 'Bengaluru', 'Karnataka', 3.6, 1092000, 1465000, 45, 'PORTAL', '3.6-year Python developer with hands-on experience in Git, SQL, Docker.', 'PLACED', '2026-05-12 18:59:00', '2026-05-13 18:59:00', NULL, 18),
+  (8, 'CAN-2026-008', 'Karthik', 'Reddy', 'karthik.reddy@example.com', '9000001008', '2000-09-11', 'Hyderabad', 'Telangana', 2.4, 900000, 1168000, 30, 'JOB_BOARD', '2.4-year Python developer with hands-on experience in Python, MySQL, Git.', 'ACTIVE', '2026-05-16 15:56:00', '2026-05-17 15:56:00', 2, 19),
+  (9, 'CAN-2026-009', 'Pooja', 'Bhatt', 'pooja.bhatt@example.com', '9000001009', '1999-08-15', 'Bengaluru', 'Karnataka', 3.2, 728000, 980000, 30, 'PORTAL', '3.2-year data analyst with hands-on experience in Python, Power BI, Data Analysis.', 'PLACED', '2026-04-12 15:33:00', '2026-04-13 15:33:00', NULL, 20),
+  (10, 'CAN-2026-010', 'Siddharth', 'Jain', 'siddharth.jain@example.com', '9000001010', '2001-02-26', 'Pune', 'Maharashtra', 2.1, 665000, 833000, 60, 'REFERRAL', '2.1-year data analyst with hands-on experience in SQL, Data Analysis, Tableau.', 'ACTIVE', '2026-04-16 09:55:00', '2026-04-17 09:55:00', 2, NULL),
+  (11, 'CAN-2026-011', 'Neelam', 'Pillai', 'neelam.pillai@example.com', '9000001011', '2000-12-22', 'Chennai', 'Tamil Nadu', 1.2, 506000, 619000, 30, 'JOB_BOARD', '1.2-year data analyst with hands-on experience in Tableau, Data Analysis, SQL.', 'ACTIVE', '2026-04-21 14:18:00', '2026-04-22 14:18:00', 2, NULL),
+  (12, 'CAN-2026-012', 'Harsh', 'Vardhan', 'harsh.vardhan@example.com', '9000001012', '2000-01-11', 'Hyderabad', 'Telangana', 2.8, 764000, 910000, 60, 'PORTAL', '2.8-year data analyst with hands-on experience in Tableau, Power BI, Data Analysis.', 'PLACED', '2026-05-21 15:27:00', '2026-05-22 15:27:00', NULL, NULL),
+  (13, 'CAN-2026-013', 'Ayesha', 'Khan', 'ayesha.khan@example.com', '9000001013', '2003-07-21', 'Hyderabad', 'Telangana', 1.9, 653000, 763000, 45, 'REFERRAL', '1.9-year data analyst with hands-on experience in Power BI, Data Analysis, SQL.', 'ACTIVE', '2026-10-19 16:39:00', '2026-10-20 16:39:00', 2, NULL),
+  (14, 'CAN-2026-014', 'Tarun', 'Chopra', 'tarun.chopra@example.com', '9000001014', '1998-03-08', 'Gurugram', 'Haryana', 4.5, 1167000, 1410000, 30, 'ADMIN_UPLOAD', '4.5-year Python developer with hands-on experience in REST API, MySQL, SQL.', 'ACTIVE', '2026-10-31 16:33:00', '2026-11-01 16:33:00', 2, NULL),
+  (15, 'CAN-2026-015', 'Divya', 'Krishnan', 'divya.krishnan@example.com', '9000001015', '2001-11-06', 'Noida', 'Uttar Pradesh', 3.4, 980000, 1308000, 45, 'PORTAL', '3.4-year Java developer with hands-on experience in Java, React, MySQL.', 'ACTIVE', '2026-10-18 17:10:00', '2026-10-19 17:10:00', NULL, NULL),
+  (16, 'CAN-2026-016', 'Manish', 'Pandey', 'manish.pandey@example.com', '9000001016', '2001-01-18', 'Lucknow', 'Uttar Pradesh', 1.0, 590000, 680000, 15, 'JOB_BOARD', '1.0-year Java developer with hands-on experience in Java, REST API, Spring Boot.', 'ACTIVE', '2026-03-29 15:31:00', '2026-03-30 15:31:00', 2, NULL),
+  (17, 'CAN-2026-017', 'Swati', 'Deshmukh', 'swati.deshmukh@example.com', '9000001017', '2002-06-03', 'Noida', 'Uttar Pradesh', 2.6, 620000, 735000, 15, 'REFERRAL', '2.6-year QA engineer with hands-on experience in REST API, Python, Selenium.', 'ACTIVE', '2026-10-17 14:04:00', '2026-10-18 14:04:00', 2, NULL),
+  (18, 'CAN-2026-018', 'Gaurav', 'Sinha', 'gaurav.sinha@example.com', '9000001018', '2000-05-27', 'Hyderabad', 'Telangana', 1.5, 550000, 662000, 45, 'PORTAL', '1.5-year data analyst with hands-on experience in SQL, Power BI, Python.', 'ACTIVE', '2026-11-08 13:16:00', '2026-11-09 13:16:00', NULL, NULL),
+  (19, 'CAN-2026-019', 'Lakshmi', 'Narayan', 'lakshmi.narayan@example.com', '9000001019', '2001-03-16', 'Bengaluru', 'Karnataka', 3.0, 1133000, 1379000, 45, 'JOB_BOARD', '3.0-year DevOps engineer with hands-on experience in Kubernetes, Git, CI/CD.', 'ACTIVE', '2026-04-02 17:14:00', '2026-04-03 17:14:00', 2, NULL),
+  (20, 'CAN-2026-020', 'Imran', 'Sheikh', 'imran.sheikh@example.com', '9000001020', '2002-08-20', 'Mumbai', 'Maharashtra', 2.0, 833000, 1028000, 45, 'OTHER', '2.0-year Python developer with hands-on experience in REST API, Git, Docker.', 'NEW', '2026-08-10 14:09:00', '2026-08-11 14:09:00', 2, NULL),
+  (21, 'CAN-2026-021', 'Ritu', 'Bhatia', 'ritu.bhatia@example.com', '9000001021', '2001-01-13', 'Delhi', 'Delhi', 1.2, 448000, 587000, 60, 'ADMIN_UPLOAD', '1.2-year QA engineer with hands-on experience in Selenium, SQL, Java.', 'INACTIVE', '2026-08-08 14:15:00', '2026-08-09 14:15:00', 2, NULL);
+
+/* ---- candidate_documents (35 rows) ---- */
+INSERT INTO candidate_documents (document_id, candidate_id, document_type, file_name, file_path, is_current, verification_status, verified_by, verified_at, uploaded_at, uploaded_by) VALUES
+  (4, 4, 'RESUME', 'Rohan_Kulkarni_Resume.pdf', '/demo/resumes/rohan_kulkarni_resume.pdf', 1, 'VERIFIED', 2, '2026-04-07 18:11:00', '2026-04-06 16:31:00', 2),
+  (5, 5, 'RESUME', 'Ishita_Nair_Resume.pdf', '/demo/resumes/ishita_nair_resume.pdf', 1, 'VERIFIED', 2, '2026-10-25 18:08:00', '2026-10-24 16:28:00', NULL),
+  (6, 6, 'RESUME', 'Mohit_Saxena_Resume_old.pdf', '/demo/resumes/mohit_saxena_resume_v1.pdf', 0, 'VERIFIED', 2, '2026-11-03 16:30:00', '2026-11-02 16:30:00', 2),
+  (7, 6, 'RESUME', 'Mohit_Saxena_Resume.pdf', '/demo/resumes/mohit_saxena_resume.pdf', 1, 'VERIFIED', 2, '2026-11-03 18:30:00', '2026-11-02 16:50:00', 2),
+  (8, 7, 'RESUME', 'Aditi_Menon_Resume_old.pdf', '/demo/resumes/aditi_menon_resume_v1.pdf', 0, 'VERIFIED', 2, '2026-05-13 18:59:00', '2026-05-12 18:59:00', 2),
+  (9, 7, 'RESUME', 'Aditi_Menon_Resume.pdf', '/demo/resumes/aditi_menon_resume.pdf', 1, 'VERIFIED', 2, '2026-05-13 20:59:00', '2026-05-12 19:19:00', NULL),
+  (10, 8, 'RESUME', 'Karthik_Reddy_Resume.pdf', '/demo/resumes/karthik_reddy_resume.pdf', 1, 'VERIFIED', 2, '2026-05-17 17:56:00', '2026-05-16 16:16:00', 2),
+  (11, 9, 'RESUME', 'Pooja_Bhatt_Resume_old.pdf', '/demo/resumes/pooja_bhatt_resume_v1.pdf', 0, 'VERIFIED', 2, '2026-04-13 15:33:00', '2026-04-12 15:33:00', 2),
+  (12, 9, 'RESUME', 'Pooja_Bhatt_Resume.pdf', '/demo/resumes/pooja_bhatt_resume.pdf', 1, 'VERIFIED', 2, '2026-04-13 17:33:00', '2026-04-12 15:53:00', NULL),
+  (13, 10, 'RESUME', 'Siddharth_Jain_Resume.pdf', '/demo/resumes/siddharth_jain_resume.pdf', 1, 'VERIFIED', 2, '2026-04-17 11:55:00', '2026-04-16 10:15:00', 2),
+  (14, 11, 'RESUME', 'Neelam_Pillai_Resume.pdf', '/demo/resumes/neelam_pillai_resume.pdf', 1, 'VERIFIED', 2, '2026-04-22 16:18:00', '2026-04-21 14:38:00', 2),
+  (15, 12, 'RESUME', 'Harsh_Vardhan_Resume_old.pdf', '/demo/resumes/harsh_vardhan_resume_v1.pdf', 0, 'VERIFIED', 2, '2026-05-22 15:27:00', '2026-05-21 15:27:00', 2),
+  (16, 12, 'RESUME', 'Harsh_Vardhan_Resume.pdf', '/demo/resumes/harsh_vardhan_resume.pdf', 1, 'VERIFIED', 2, '2026-05-22 17:27:00', '2026-05-21 15:47:00', NULL),
+  (17, 13, 'RESUME', 'Ayesha_Khan_Resume.pdf', '/demo/resumes/ayesha_khan_resume.pdf', 1, 'VERIFIED', 2, '2026-10-20 18:39:00', '2026-10-19 16:59:00', 2),
+  (18, 14, 'RESUME', 'Tarun_Chopra_Resume.pdf', '/demo/resumes/tarun_chopra_resume.pdf', 1, 'VERIFIED', 2, '2026-11-01 18:33:00', '2026-10-31 16:53:00', 2),
+  (19, 15, 'RESUME', 'Divya_Krishnan_Resume.pdf', '/demo/resumes/divya_krishnan_resume.pdf', 1, 'VERIFIED', 2, '2026-10-19 19:10:00', '2026-10-18 17:30:00', NULL),
+  (20, 16, 'RESUME', 'Manish_Pandey_Resume.pdf', '/demo/resumes/manish_pandey_resume.pdf', 1, 'VERIFIED', 2, '2026-03-30 17:31:00', '2026-03-29 15:51:00', 2),
+  (21, 17, 'RESUME', 'Swati_Deshmukh_Resume.pdf', '/demo/resumes/swati_deshmukh_resume.pdf', 1, 'VERIFIED', 2, '2026-10-18 16:04:00', '2026-10-17 14:24:00', 2),
+  (22, 18, 'RESUME', 'Gaurav_Sinha_Resume_old.pdf', '/demo/resumes/gaurav_sinha_resume_v1.pdf', 0, 'VERIFIED', 2, '2026-11-09 13:16:00', '2026-11-08 13:16:00', 2),
+  (23, 18, 'RESUME', 'Gaurav_Sinha_Resume.pdf', '/demo/resumes/gaurav_sinha_resume.pdf', 1, 'VERIFIED', 2, '2026-11-09 15:16:00', '2026-11-08 13:36:00', NULL),
+  (24, 19, 'RESUME', 'Lakshmi_Narayan_Resume.pdf', '/demo/resumes/lakshmi_narayan_resume.pdf', 1, 'VERIFIED', 2, '2026-04-03 19:14:00', '2026-04-02 17:34:00', 2),
+  (25, 20, 'RESUME', 'Imran_Sheikh_Resume.pdf', '/demo/resumes/imran_sheikh_resume.pdf', 1, 'PENDING', NULL, NULL, '2026-08-10 14:29:00', 2),
+  (26, 21, 'RESUME', 'Ritu_Bhatia_Resume.pdf', '/demo/resumes/ritu_bhatia_resume.pdf', 1, 'VERIFIED', 2, '2026-08-09 16:15:00', '2026-08-08 14:35:00', 2),
+  (27, 1, 'ID_PROOF', 'Arjun_Rao_id_proof.pdf', '/demo/kyc/001_id_proof.pdf', 1, 'VERIFIED', 2, '2026-05-26 11:00:00', '2026-05-25 11:00:00', 2),
+  (28, 1, 'EDUCATION_CERT', 'Arjun_Rao_degree_certificate.pdf', '/demo/kyc/001_degree_certificate.pdf', 1, 'VERIFIED', 2, '2026-05-26 11:00:00', '2026-05-25 11:00:00', 2),
+  (29, 3, 'ID_PROOF', 'Vikram_Das_id_proof.pdf', '/demo/kyc/003_id_proof.pdf', 1, 'VERIFIED', 2, '2026-05-29 11:00:00', '2026-05-28 11:00:00', 2),
+  (30, 3, 'EDUCATION_CERT', 'Vikram_Das_degree_certificate.pdf', '/demo/kyc/003_degree_certificate.pdf', 1, 'VERIFIED', 2, '2026-05-29 11:00:00', '2026-05-28 11:00:00', 2),
+  (31, 4, 'ID_PROOF', 'Rohan_Kulkarni_id_proof.pdf', '/demo/kyc/004_id_proof.pdf', 1, 'VERIFIED', 10, '2026-04-28 12:27:00', '2026-04-27 12:27:00', 10),
+  (32, 4, 'EDUCATION_CERT', 'Rohan_Kulkarni_degree_certificate.pdf', '/demo/kyc/004_degree_certificate.pdf', 1, 'VERIFIED', 10, '2026-04-28 12:27:00', '2026-04-27 12:27:00', 10),
+  (33, 7, 'ID_PROOF', 'Aditi_Menon_id_proof.pdf', '/demo/kyc/007_id_proof.pdf', 1, 'VERIFIED', 10, '2026-06-10 11:05:00', '2026-06-09 11:05:00', 10),
+  (34, 7, 'EDUCATION_CERT', 'Aditi_Menon_degree_certificate.pdf', '/demo/kyc/007_degree_certificate.pdf', 1, 'VERIFIED', 10, '2026-06-10 11:05:00', '2026-06-09 11:05:00', 10),
+  (35, 9, 'ID_PROOF', 'Pooja_Bhatt_id_proof.pdf', '/demo/kyc/009_id_proof.pdf', 1, 'VERIFIED', 3, '2026-05-18 15:40:00', '2026-05-17 15:40:00', 3),
+  (36, 9, 'EDUCATION_CERT', 'Pooja_Bhatt_degree_certificate.pdf', '/demo/kyc/009_degree_certificate.pdf', 1, 'VERIFIED', 3, '2026-05-18 15:40:00', '2026-05-17 15:40:00', 3),
+  (37, 12, 'ID_PROOF', 'Harsh_Vardhan_id_proof.pdf', '/demo/kyc/012_id_proof.pdf', 1, 'VERIFIED', 2, '2026-06-18 13:10:00', '2026-06-17 13:10:00', 2),
+  (38, 12, 'EDUCATION_CERT', 'Harsh_Vardhan_degree_certificate.pdf', '/demo/kyc/012_degree_certificate.pdf', 1, 'VERIFIED', 2, '2026-06-18 13:10:00', '2026-06-17 13:10:00', 2);
+
+/* ---- candidate_education (18 rows) ---- */
+INSERT INTO candidate_education (education_id, candidate_id, qualification, specialization, institution, passing_year, grade_or_percentage) VALUES
+  (4, 4, 'B.Tech', 'Computer Science', 'Riverdale University', 2020, '82%'),
+  (5, 5, 'B.Tech', 'Computer Science', 'Central Business School', 2022, '8.7 CGPA'),
+  (6, 6, 'B.E.', 'Information Technology', 'Capital University', 2020, '69%'),
+  (7, 7, 'B.Tech', 'Computer Science', 'Lakeview College of Engineering', 2023, '7.3 CGPA'),
+  (8, 8, 'B.Tech', 'Computer Science', 'Capital University', 2023, '62%'),
+  (9, 9, 'B.Sc', 'Statistics', 'Riverdale University', 2023, '7.0 CGPA'),
+  (10, 10, 'B.Tech', 'Information Technology', 'Northern Institute of Technology', 2024, '8.8 CGPA'),
+  (11, 11, 'B.Tech', 'Information Technology', 'Capital University', 2025, '75%'),
+  (12, 12, 'B.Sc', 'Statistics', 'Capital University', 2024, '7.2 CGPA'),
+  (13, 13, 'B.Sc', 'Statistics', 'Western Engineering College', 2025, '8.7 CGPA'),
+  (14, 14, 'B.Tech', 'Computer Science', 'Northern Institute of Technology', 2021, '78%'),
+  (15, 15, 'MCA', 'Computer Applications', 'Capital University', 2023, '8.5 CGPA'),
+  (16, 16, 'B.Tech', 'Computer Science', 'Lakeview College of Engineering', 2025, '8.6 CGPA'),
+  (17, 17, 'BCA', 'Computer Applications', 'Capital University', 2023, '76%'),
+  (18, 18, 'MBA', 'Business Analytics', 'Northern Institute of Technology', 2025, '87%'),
+  (19, 19, 'B.Tech', 'Computer Science', 'Northern Institute of Technology', 2023, '8.8 CGPA'),
+  (20, 20, 'MCA', 'Computer Applications', 'Capital University', 2023, '80%'),
+  (21, 21, 'BCA', 'Computer Applications', 'Capital University', 2024, '76%');
+
+/* ---- candidate_experience (26 rows) ---- */
+INSERT INTO candidate_experience (experience_id, candidate_id, employer_name, designation, start_date, end_date, is_current) VALUES
+  (5, 4, 'Cobalt Software Labs', 'Senior Devops Engineer', '2023-11-28', NULL, 1),
+  (6, 4, 'Lumen Health Tech', 'Devops Engineer', '2021-06-08', '2023-11-01', 0),
+  (7, 5, 'Harbor Fintech', 'Devops Engineer', '2024-06-24', NULL, 1),
+  (8, 5, 'Tekvista Systems', 'Devops Engineer', '2022-07-15', '2024-06-07', 0),
+  (9, 6, 'Vertex Cloud Labs', 'Senior Devops Engineer', '2023-10-13', NULL, 1),
+  (10, 6, 'Bluepeak Solutions', 'Devops Engineer', '2020-09-19', '2023-09-19', 0),
+  (11, 7, 'Lumen Health Tech', 'Python Developer', '2024-12-25', NULL, 1),
+  (12, 7, 'Quantelle Analytics', 'Python Developer', '2023-02-27', '2024-12-15', 0),
+  (13, 8, 'Tekvista Systems', 'Python Developer', '2024-04-05', NULL, 1),
+  (14, 9, 'Bluepeak Solutions', 'Data Analyst', '2025-03-18', NULL, 1),
+  (15, 9, 'Cobalt Software Labs', 'Data Analyst', '2023-06-10', '2025-02-19', 0),
+  (16, 10, 'Quantelle Analytics', 'Data Analyst', '2024-09-06', NULL, 1),
+  (17, 11, 'Orchid Infotech', 'Data Analyst', '2025-08-14', NULL, 1),
+  (18, 12, 'Cobalt Software Labs', 'Data Analyst', '2023-11-22', NULL, 1),
+  (19, 13, 'Harbor Fintech', 'Data Analyst', '2024-10-13', NULL, 1),
+  (20, 14, 'Vertex Cloud Labs', 'Python Developer', '2024-11-13', NULL, 1),
+  (21, 14, 'Bluepeak Solutions', 'Python Developer', '2022-03-27', '2024-10-31', 0),
+  (22, 15, 'Lumen Health Tech', 'Java Developer', '2025-08-18', NULL, 1),
+  (23, 15, 'Quantelle Analytics', 'Java Developer', '2023-05-16', '2025-07-27', 0),
+  (24, 16, 'Tekvista Systems', 'Java Developer', '2025-10-02', NULL, 1),
+  (25, 17, 'Bluepeak Solutions', 'Qa Engineer', '2024-02-03', NULL, 1),
+  (26, 18, 'Quantelle Analytics', 'Data Analyst', '2025-04-27', NULL, 1),
+  (27, 19, 'Orchid Infotech', 'Devops Engineer', '2025-06-20', NULL, 1),
+  (28, 19, 'Vertex Cloud Labs', 'Devops Engineer', '2023-09-06', '2025-05-18', 0),
+  (29, 20, 'Cobalt Software Labs', 'Python Developer', '2024-09-13', NULL, 1),
+  (30, 21, 'Harbor Fintech', 'Qa Engineer', '2025-08-17', NULL, 1);
+
+/* ---- candidate_skills (81 rows) ---- */
+INSERT INTO candidate_skills (candidate_id, skill_id, experience_years, proficiency) VALUES
+  (4, 6, 3.2, 'ADVANCED'),
+  (4, 12, 1.4, 'EXPERT'),
+  (4, 10, 1.9, 'ADVANCED'),
+  (4, 17, 1.7, 'ADVANCED'),
+  (5, 10, 0.9, 'INTERMEDIATE'),
+  (5, 6, 2.0, 'INTERMEDIATE'),
+  (5, 17, 3.2, 'INTERMEDIATE'),
+  (5, 12, 3.7, 'INTERMEDIATE'),
+  (6, 12, 0.7, 'INTERMEDIATE'),
+  (6, 17, 5.1, 'EXPERT'),
+  (6, 13, 3.2, 'ADVANCED'),
+  (6, 6, 1.4, 'EXPERT'),
+  (6, 10, 2.0, 'INTERMEDIATE'),
+  (7, 17, 1.3, 'BEGINNER'),
+  (7, 7, 0.8, 'INTERMEDIATE'),
+  (7, 10, 2.0, 'ADVANCED'),
+  (7, 4, 0.5, 'INTERMEDIATE'),
+  (8, 6, 1.1, 'ADVANCED'),
+  (8, 4, 1.8, 'INTERMEDIATE'),
+  (8, 17, 2.3, 'BEGINNER'),
+  (8, 10, 1.0, 'INTERMEDIATE'),
+  (9, 6, 2.8, 'INTERMEDIATE'),
+  (9, 14, 1.4, 'BEGINNER'),
+  (9, 16, 1.3, 'BEGINNER'),
+  (9, 15, 1.0, 'INTERMEDIATE'),
+  (10, 7, 1.6, 'INTERMEDIATE'),
+  (10, 16, 0.5, 'BEGINNER'),
+  (10, 15, 1.3, 'BEGINNER'),
+  (10, 14, 1.4, 'INTERMEDIATE'),
+  (10, 6, 0.6, 'INTERMEDIATE'),
+  (11, 15, 0.8, 'ADVANCED'),
+  (11, 16, 1.0, 'INTERMEDIATE'),
+  (11, 7, 0.8, 'INTERMEDIATE'),
+  (11, 6, 0.6, 'ADVANCED'),
+  (12, 15, 1.6, 'INTERMEDIATE'),
+  (12, 14, 2.4, 'BEGINNER'),
+  (12, 16, 1.3, 'INTERMEDIATE'),
+  (12, 6, 0.7, 'INTERMEDIATE'),
+  (13, 14, 1.4, 'ADVANCED'),
+  (13, 16, 1.5, 'INTERMEDIATE');
+INSERT INTO candidate_skills (candidate_id, skill_id, experience_years, proficiency) VALUES
+  (13, 7, 1.4, 'INTERMEDIATE'),
+  (13, 15, 1.2, 'ADVANCED'),
+  (13, 6, 1.1, 'INTERMEDIATE'),
+  (14, 5, 3.6, 'BEGINNER'),
+  (14, 4, 1.8, 'BEGINNER'),
+  (14, 7, 1.0, 'INTERMEDIATE'),
+  (14, 17, 2.0, 'ADVANCED'),
+  (14, 10, 3.1, 'INTERMEDIATE'),
+  (15, 1, 1.3, 'ADVANCED'),
+  (15, 3, 0.6, 'ADVANCED'),
+  (15, 4, 3.0, 'ADVANCED'),
+  (15, 5, 0.6, 'INTERMEDIATE'),
+  (16, 1, 0.6, 'INTERMEDIATE'),
+  (16, 5, 0.6, 'BEGINNER'),
+  (16, 2, 0.7, 'INTERMEDIATE'),
+  (16, 4, 0.9, 'INTERMEDIATE'),
+  (17, 5, 0.6, 'BEGINNER'),
+  (17, 6, 2.5, 'INTERMEDIATE'),
+  (17, 8, 2.5, 'INTERMEDIATE'),
+  (17, 7, 2.0, 'BEGINNER'),
+  (17, 1, 1.0, 'BEGINNER'),
+  (18, 7, 1.4, 'INTERMEDIATE'),
+  (18, 14, 1.1, 'INTERMEDIATE'),
+  (18, 6, 0.9, 'BEGINNER'),
+  (18, 16, 1.3, 'BEGINNER'),
+  (18, 15, 0.6, 'INTERMEDIATE'),
+  (19, 12, 1.6, 'BEGINNER'),
+  (19, 17, 0.6, 'BEGINNER'),
+  (19, 13, 1.5, 'BEGINNER'),
+  (19, 11, 1.1, 'ADVANCED'),
+  (19, 6, 2.9, 'BEGINNER'),
+  (20, 5, 1.3, 'INTERMEDIATE'),
+  (20, 17, 0.5, 'INTERMEDIATE'),
+  (20, 10, 1.2, 'ADVANCED'),
+  (20, 7, 0.7, 'BEGINNER'),
+  (20, 4, 1.7, 'ADVANCED'),
+  (21, 8, 0.8, 'INTERMEDIATE'),
+  (21, 7, 0.9, 'ADVANCED'),
+  (21, 1, 0.6, 'BEGINNER'),
+  (21, 6, 1.0, 'INTERMEDIATE');
+INSERT INTO candidate_skills (candidate_id, skill_id, experience_years, proficiency) VALUES
+  (21, 5, 0.5, 'ADVANCED');
+
+/* ---- applications (16 rows) ---- */
+INSERT INTO applications (application_id, application_number, requirement_id, candidate_id, recruiter_id, status, source, applied_at, rejection_reason) VALUES
+  (4, 'APP-2026-004', 4, 4, 10, 'SELECTED', 'RECRUITER_ADDED', '2026-04-08 16:11:00', NULL),
+  (5, 'APP-2026-005', 4, 5, 10, 'INTERVIEW', 'REFERRAL', '2026-11-01 16:08:00', NULL),
+  (6, 'APP-2026-006', 4, 6, 10, 'SHORTLISTED', 'REFERRAL', '2026-11-07 16:30:00', NULL),
+  (7, 'APP-2026-007', 4, 19, 10, 'WITHDRAWN', 'JOB_BOARD', '2026-04-16 17:14:00', NULL),
+  (8, 'APP-2026-008', 5, 7, 10, 'SELECTED', 'SELF_APPLIED', '2026-05-22 18:59:00', NULL),
+  (9, 'APP-2026-009', 5, 8, 10, 'REJECTED', 'SELF_APPLIED', '2026-05-18 15:56:00', 'Role fit concerns raised by interviewer'),
+  (10, 'APP-2026-010', 6, 9, 3, 'SELECTED', 'SELF_APPLIED', '2026-04-27 15:33:00', NULL),
+  (11, 'APP-2026-011', 6, 10, 3, 'REJECTED', 'SELF_APPLIED', '2026-05-02 09:55:00', 'Customer preferred a different profile'),
+  (12, 'APP-2026-012', 6, 11, 3, 'REJECTED', 'REFERRAL', '2026-04-28 14:18:00', 'Does not meet mandatory skill requirement'),
+  (13, 'APP-2026-013', 7, 12, 2, 'SELECTED', 'JOB_BOARD', '2026-05-31 15:27:00', NULL),
+  (14, 'APP-2026-014', 7, 13, 2, 'SELECTED', 'SELF_APPLIED', '2026-10-23 16:39:00', NULL),
+  (15, 'APP-2026-015', 7, 18, 2, 'APPLIED', 'REFERRAL', '2026-11-19 13:16:00', NULL),
+  (16, 'APP-2026-016', 8, 14, 10, 'SCREENING', 'REFERRAL', '2026-11-15 16:33:00', NULL),
+  (17, 'APP-2026-017', 1, 15, 2, 'SHORTLISTED', 'JOB_BOARD', '2026-11-03 17:10:00', NULL),
+  (18, 'APP-2026-018', 1, 16, 2, 'REJECTED', 'RECRUITER_ADDED', '2026-04-13 15:31:00', 'Experience below required range'),
+  (19, 'APP-2026-019', 2, 17, 3, 'INTERVIEW', 'RECRUITER_ADDED', '2026-10-30 14:04:00', NULL);
+
+/* ---- screenings (15 rows) ---- */
+INSERT INTO screenings (screening_id, application_id, screened_by, screened_at, result, score, remarks) VALUES
+  (4, 4, 10, '2026-04-10 15:03:00', 'PASS', 84.89, 'Meets mandatory criteria.'),
+  (5, 5, 10, '2026-11-03 11:18:00', 'PASS', 82.57, 'Meets mandatory criteria.'),
+  (6, 6, 10, '2026-11-09 13:36:00', 'PASS', 91.1, 'Meets mandatory criteria.'),
+  (7, 7, 10, '2026-04-17 15:21:00', 'PASS', 81.87, 'Meets mandatory criteria.'),
+  (8, 8, 10, '2026-05-24 09:02:00', 'PASS', 82.34, 'Meets mandatory criteria.'),
+  (9, 9, 10, '2026-05-19 12:06:00', 'PASS', 90.57, 'Meets mandatory criteria.'),
+  (10, 10, 3, '2026-04-29 10:13:00', 'PASS', 72.48, 'Meets mandatory criteria.'),
+  (11, 11, 3, '2026-05-04 12:03:00', 'PASS', 93.27, 'Meets mandatory criteria.'),
+  (12, 12, 3, '2026-04-29 14:49:00', 'FAIL', 39.04, 'Missing mandatory skills for the role.'),
+  (13, 13, 2, '2026-06-02 11:53:00', 'PASS', 83.11, 'Meets mandatory criteria.'),
+  (14, 14, 2, '2026-10-24 14:18:00', 'PASS', 81.39, 'Meets mandatory criteria.'),
+  (15, 16, 10, '2026-11-17 16:37:00', 'HOLD', 59.68, 'Borderline profile; awaiting more details.'),
+  (16, 17, 2, '2026-11-04 13:50:00', 'PASS', 78.89, 'Meets mandatory criteria.'),
+  (17, 18, 2, '2026-04-14 17:29:00', 'FAIL', 34.49, 'Missing mandatory skills for the role.'),
+  (18, 19, 3, '2026-10-31 09:38:00', 'PASS', 73.66, 'Meets mandatory criteria.');
+
+/* ---- shortlists (11 rows) ---- */
+INSERT INTO shortlists (shortlist_id, application_id, shortlisted_by, shortlisted_at, status, customer_decision_by, customer_decision_at) VALUES
+  (4, 4, 10, '2026-04-13 13:04:00', 'CUSTOMER_ACCEPTED', 4, '2026-04-14 11:43:00'),
+  (5, 5, 10, '2026-11-05 17:38:00', 'CUSTOMER_ACCEPTED', 4, '2026-11-07 17:56:00'),
+  (6, 6, 10, '2026-11-12 14:26:00', 'SHORTLISTED', NULL, NULL),
+  (7, 8, 10, '2026-05-27 13:18:00', 'CUSTOMER_ACCEPTED', 4, '2026-05-29 09:43:00'),
+  (8, 9, 10, '2026-05-21 16:04:00', 'CUSTOMER_ACCEPTED', 4, '2026-05-23 17:43:00'),
+  (9, 10, 3, '2026-05-02 09:06:00', 'CUSTOMER_ACCEPTED', 4, '2026-05-03 10:46:00'),
+  (10, 11, 3, '2026-05-07 09:19:00', 'CUSTOMER_REJECTED', 4, '2026-05-08 09:41:00'),
+  (11, 13, 2, '2026-06-04 12:32:00', 'CUSTOMER_ACCEPTED', 6, '2026-06-06 15:12:00'),
+  (12, 14, 2, '2026-10-27 11:34:00', 'CUSTOMER_ACCEPTED', 6, '2026-10-28 16:40:00'),
+  (13, 17, 2, '2026-11-07 12:43:00', 'SHORTLISTED', NULL, NULL),
+  (14, 19, 3, '2026-11-02 16:57:00', 'CUSTOMER_ACCEPTED', 1, '2026-11-04 16:24:00');
+
+/* ---- resume_shares (11 rows) ---- */
+INSERT INTO resume_shares (share_id, application_id, shared_with_contact_id, document_id, shared_by, shared_at, access_expires_at, viewed_at, status) VALUES
+  (4, 4, 4, 4, 10, '2026-04-13 14:12:00', '2026-05-13 14:12:00', '2026-04-14 16:12:00', 'VIEWED'),
+  (5, 5, 4, 5, 10, '2026-11-05 18:47:00', '2026-12-05 18:47:00', '2026-11-06 00:47:00', 'VIEWED'),
+  (6, 6, 4, 7, 10, '2026-11-12 14:40:00', '2026-12-12 14:40:00', NULL, 'SHARED'),
+  (7, 8, 4, 9, 10, '2026-05-27 14:09:00', '2026-06-26 14:09:00', '2026-05-28 05:09:00', 'VIEWED'),
+  (8, 9, 4, 10, 10, '2026-05-21 16:27:00', '2026-06-20 16:27:00', '2026-05-21 20:27:00', 'VIEWED'),
+  (9, 10, 4, 12, 3, '2026-05-02 10:08:00', '2026-06-01 10:08:00', '2026-05-02 13:08:00', 'VIEWED'),
+  (10, 11, 4, 13, 3, '2026-05-07 10:42:00', '2026-06-06 10:42:00', '2026-05-08 12:42:00', 'VIEWED'),
+  (11, 13, 6, 16, 2, '2026-06-04 13:41:00', '2026-07-04 13:41:00', '2026-06-05 03:41:00', 'VIEWED'),
+  (12, 14, 6, 17, 2, '2026-10-27 11:55:00', '2026-11-26 11:55:00', '2026-10-28 11:55:00', 'VIEWED'),
+  (13, 17, 1, 19, 2, '2026-11-07 13:13:00', '2026-12-07 13:13:00', '2026-11-08 13:13:00', 'VIEWED'),
+  (14, 19, 1, 21, 3, '2026-11-02 17:44:00', '2026-12-02 17:44:00', '2026-11-03 13:44:00', 'VIEWED');
+
+/* ---- interviews (14 rows) ---- */
+INSERT INTO interviews (interview_id, application_id, round_number, interview_type, scheduled_start, scheduled_end, location_or_link, interviewer_user_id, status, created_by, created_at) VALUES
+  (4, 4, 1, 'VIDEO', '2026-04-18 11:15:00', '2026-04-18 12:15:00', 'https://meet.example.com/interview-004', 11, 'COMPLETED', 10, '2026-04-14 14:43:00'),
+  (5, 4, 2, 'VIDEO', '2026-04-22 12:30:00', '2026-04-22 13:00:00', 'https://meet.example.com/interview-005', 10, 'COMPLETED', 10, '2026-04-14 14:43:00'),
+  (6, 5, 1, 'VIDEO', '2026-11-11 10:30:00', '2026-11-11 11:15:00', 'https://meet.example.com/interview-006', 11, 'COMPLETED', 10, '2026-11-07 20:56:00'),
+  (7, 5, 2, 'VIDEO', '2026-11-23 12:30:00', '2026-11-23 13:00:00', 'https://meet.example.com/interview-007', 10, 'SCHEDULED', 10, '2026-11-07 20:56:00'),
+  (8, 8, 1, 'VIDEO', '2026-06-01 14:30:00', '2026-06-01 15:15:00', 'https://meet.example.com/interview-008', 11, 'COMPLETED', 10, '2026-05-29 12:43:00'),
+  (9, 8, 2, 'VIDEO', '2026-06-04 16:00:00', '2026-06-04 17:00:00', 'https://meet.example.com/interview-009', 10, 'COMPLETED', 10, '2026-05-29 12:43:00'),
+  (10, 9, 1, 'VIDEO', '2026-05-26 14:00:00', '2026-05-26 14:30:00', 'https://meet.example.com/interview-010', 11, 'COMPLETED', 10, '2026-05-23 20:43:00'),
+  (11, 10, 1, 'IN_PERSON', '2026-05-07 11:30:00', '2026-05-07 12:15:00', 'Customer office, Bengaluru', 11, 'COMPLETED', 3, '2026-05-03 13:46:00'),
+  (12, 10, 2, 'IN_PERSON', '2026-05-12 10:00:00', '2026-05-12 10:30:00', 'Customer office, Bengaluru', 3, 'COMPLETED', 3, '2026-05-03 13:46:00'),
+  (13, 13, 1, 'IN_PERSON', '2026-06-10 12:15:00', '2026-06-10 12:45:00', 'Customer office, Hyderabad', 13, 'COMPLETED', 2, '2026-06-06 18:12:00'),
+  (14, 13, 2, 'VIDEO', '2026-06-13 13:00:00', '2026-06-13 13:30:00', 'https://meet.example.com/interview-014', 2, 'COMPLETED', 2, '2026-06-06 18:12:00'),
+  (15, 14, 1, 'IN_PERSON', '2026-10-31 15:00:00', '2026-10-31 16:00:00', 'Customer office, Hyderabad', 13, 'COMPLETED', 2, '2026-10-28 19:40:00'),
+  (16, 14, 2, 'VIDEO', '2026-11-03 12:00:00', '2026-11-03 12:30:00', 'https://meet.example.com/interview-016', 2, 'COMPLETED', 2, '2026-10-28 19:40:00'),
+  (17, 19, 1, 'IN_PERSON', '2026-11-20 10:45:00', '2026-11-20 11:15:00', 'Customer office, Noida', 4, 'SCHEDULED', 3, '2026-11-04 19:24:00');
+
+/* ---- interview_feedback (12 rows) ---- */
+INSERT INTO interview_feedback (feedback_id, interview_id, technical_rating, communication_rating, recommendation, feedback_text, entered_by, submitted_at) VALUES
+  (4, 4, 4.4, 4.0, 'HIRE', 'Good technical depth and relevant experience. Recommended for the role.', 11, '2026-04-18 13:15:00'),
+  (5, 5, 5.0, 4.5, 'STRONG_HIRE', 'Excellent grasp of fundamentals and clear communication. Strongly recommended.', 10, '2026-04-22 14:30:00'),
+  (6, 6, 3.5, 3.5, 'HIRE', 'Good technical depth and relevant experience. Recommended for the role.', 11, '2026-11-11 12:30:00'),
+  (7, 8, 3.7, 3.8, 'HIRE', 'Good technical depth and relevant experience. Recommended for the role.', 11, '2026-06-01 16:30:00'),
+  (8, 9, 4.5, 4.9, 'STRONG_HIRE', 'Excellent grasp of fundamentals and clear communication. Strongly recommended.', 10, '2026-06-04 18:00:00'),
+  (9, 10, 2.2, 2.2, 'NO_HIRE', 'Gaps in core skills for this role. Not recommended at this time.', 11, '2026-05-26 16:00:00'),
+  (10, 11, 4.0, 3.7, 'HIRE', 'Good technical depth and relevant experience. Recommended for the role.', 11, '2026-05-07 13:30:00'),
+  (11, 12, 4.9, 4.8, 'STRONG_HIRE', 'Excellent grasp of fundamentals and clear communication. Strongly recommended.', 3, '2026-05-12 12:00:00'),
+  (12, 13, 4.4, 4.5, 'HIRE', 'Good technical depth and relevant experience. Recommended for the role.', 13, '2026-06-10 14:15:00'),
+  (13, 14, 4.0, 4.1, 'HIRE', 'Good technical depth and relevant experience. Recommended for the role.', 2, '2026-06-13 15:00:00'),
+  (14, 15, 3.9, 4.1, 'HIRE', 'Good technical depth and relevant experience. Recommended for the role.', 13, '2026-10-31 17:00:00'),
+  (15, 16, 4.9, 4.9, 'STRONG_HIRE', 'Excellent grasp of fundamentals and clear communication. Strongly recommended.', 2, '2026-11-03 14:00:00');
+
+/* ---- selections (5 rows) ---- */
+INSERT INTO selections (selection_id, application_id, agreed_ctc, expected_joining_date, customer_confirmation_ref, selected_by, selected_at, notes) VALUES
+  (3, 4, 1080000, '2026-06-01', 'CUST3-SEL-2026-004', 10, '2026-04-24 12:27:00', 'Customer confirmed selection by email.'),
+  (4, 8, 960000, '2026-07-01', 'CUST3-SEL-2026-008', 10, '2026-06-06 11:05:00', 'Customer confirmed selection by email.'),
+  (5, 10, 980000, '2026-08-03', 'CUST3-SEL-2026-010', 3, '2026-05-14 15:40:00', 'Customer confirmed selection by email.'),
+  (6, 13, 900000, '2026-09-14', 'CUST4-SEL-2026-013', 2, '2026-06-14 13:10:00', 'Customer confirmed selection by email.'),
+  (7, 14, 763000, '2026-12-29', 'CUST4-SEL-2026-014', 2, '2026-11-05 16:08:00', 'Customer confirmed selection by email.');
+
+/* ---- offers (5 rows) ---- */
+INSERT INTO offers (offer_id, selection_id, offer_reference, offered_ctc, offered_at, expires_at, proposed_joining_date, status, document_path, responded_at) VALUES
+  (3, 3, 'OFFER-2026-003', 1080000, '2026-04-26 11:50:00', '2026-05-06 11:50:00', '2026-06-01', 'ACCEPTED', '/demo/offers/offer_2026_003.pdf', '2026-04-29 09:21:00'),
+  (4, 4, 'OFFER-2026-004', 960000, '2026-06-08 17:01:00', '2026-06-18 17:01:00', '2026-07-01', 'ACCEPTED', '/demo/offers/offer_2026_004.pdf', '2026-06-10 17:30:00'),
+  (5, 5, 'OFFER-2026-005', 980000, '2026-05-15 09:58:00', '2026-05-25 09:58:00', '2026-08-03', 'ACCEPTED', '/demo/offers/offer_2026_005.pdf', '2026-05-18 12:42:00'),
+  (6, 6, 'OFFER-2026-006', 900000, '2026-06-16 12:46:00', '2026-06-26 12:46:00', '2026-09-14', 'ACCEPTED', '/demo/offers/offer_2026_006.pdf', '2026-06-20 12:31:00');
+INSERT INTO offers (offer_id, selection_id, offer_reference, offered_ctc, offered_at, expires_at, proposed_joining_date, status, document_path) VALUES
+  (7, 7, 'OFFER-2026-007', 763000, '2026-11-16 13:23:00', '2026-11-25 12:36:00', '2026-12-29', 'SENT', '/demo/offers/offer_2026_007.pdf');
+
+/* ---- placements (2 rows) ---- */
+INSERT INTO placements (placement_id, selection_id, joining_date, evidence_type, evidence_path, confirmed_by_contact_id, confirmed_at, guarantee_end_date, outcome, notes) VALUES
+  (3, 5, '2026-08-03', 'JOINING_LETTER', '/demo/placements/placement_003.pdf', 4, '2026-08-04 11:32:00', '2026-11-01', 'CONFIRMED', 'Guarantee period completed.'),
+  (4, 6, '2026-09-14', 'JOINING_LETTER', '/demo/placements/placement_004.pdf', 6, '2026-09-15 16:26:00', '2026-12-13', 'JOINED', 'Joining confirmed by customer HR.');
+
+/* ---- employees (2 rows) ---- */
+INSERT INTO employees (employee_id, employee_code, candidate_id, date_of_joining, status, created_at) VALUES
+  (2, 'EMP-2026-002', 4, '2026-06-01', 'ACTIVE', '2026-05-28 11:32:00'),
+  (3, 'EMP-2026-003', 7, '2026-07-01', 'ACTIVE', '2026-06-27 14:54:00');
+
+/* ---- employment_contracts (2 rows) ---- */
+INSERT INTO employment_contracts (contract_id, employee_id, contract_number, contract_type, start_date, end_date, compensation_basis, gross_compensation, status, signed_date, document_path) VALUES
+  (2, 2, 'EC-2026-002', 'FIXED_TERM', '2026-06-01', '2027-02-28', 'MONTHLY', 90000, 'ACTIVE', '2026-05-29', '/demo/contracts/ec_2026_002.pdf'),
+  (3, 3, 'EC-2026-003', 'FIXED_TERM', '2026-07-01', '2027-02-28', 'MONTHLY', 80000, 'ACTIVE', '2026-06-28', '/demo/contracts/ec_2026_003.pdf');
+
+/* ---- deployments (2 rows) ---- */
+INSERT INTO deployments (deployment_id, employee_id, selection_id, work_location, start_date, agreed_hours_per_week, customer_supervisor_contact_id, status, created_at) VALUES
+  (2, 2, 3, 'Bengaluru - Hybrid', '2026-06-01', 40, 4, 'ACTIVE', '2026-05-29 15:12:00'),
+  (3, 3, 4, 'Bengaluru - Hybrid', '2026-07-01', 40, 4, 'ACTIVE', '2026-06-28 14:24:00');
+
+/* ---- attendance (313 rows) ---- */
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (3, 1, '2026-06-17', '2026-06-17 08:16:00', '2026-06-17 17:53:00', 'PRESENT', 8, 0.5, 4, '2026-06-18 18:14:00'),
+  (4, 1, '2026-06-18', '2026-06-18 08:51:00', '2026-06-18 17:51:00', 'PRESENT', 8, 0, 4, '2026-06-19 18:31:00'),
+  (5, 1, '2026-06-19', '2026-06-19 09:38:00', '2026-06-19 18:38:00', 'PRESENT', 8, 0, 4, '2026-06-20 17:54:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (6, 1, '2026-06-20', 'WEEK_OFF', 0, 0, 4, '2026-06-21 17:53:00'),
+  (7, 1, '2026-06-21', 'WEEK_OFF', 0, 0, 4, '2026-06-22 17:20:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (8, 1, '2026-06-22', '2026-06-22 09:40:00', '2026-06-22 18:57:00', 'PRESENT', 8, 0, 4, '2026-06-23 18:07:00'),
+  (9, 1, '2026-06-23', '2026-06-23 08:26:00', '2026-06-23 17:41:00', 'PRESENT', 8, 0, 4, '2026-06-24 17:11:00'),
+  (10, 1, '2026-06-24', '2026-06-24 09:45:00', '2026-06-24 19:49:00', 'PRESENT', 8, 1, 4, '2026-06-25 17:31:00'),
+  (11, 1, '2026-06-25', '2026-06-25 09:54:00', '2026-06-25 19:27:00', 'PRESENT', 8, 0.5, 4, '2026-06-26 17:19:00'),
+  (12, 1, '2026-06-26', '2026-06-26 09:03:00', '2026-06-26 18:14:00', 'PRESENT', 8, 0, 4, '2026-06-27 18:35:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (13, 1, '2026-06-27', 'WEEK_OFF', 0, 0, 4, '2026-06-28 17:08:00'),
+  (14, 1, '2026-06-28', 'WEEK_OFF', 0, 0, 4, '2026-06-29 18:25:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (15, 1, '2026-06-29', '2026-06-29 09:56:00', '2026-06-29 18:57:00', 'PRESENT', 8, 0, 4, '2026-06-30 18:23:00'),
+  (16, 1, '2026-06-30', '2026-06-30 09:27:00', '2026-06-30 19:12:00', 'PRESENT', 8, 0.5, 4, '2026-07-01 18:34:00'),
+  (17, 1, '2026-07-01', '2026-07-01 09:56:00', '2026-07-01 19:16:00', 'PRESENT', 8, 0, 4, '2026-07-02 18:51:00'),
+  (18, 1, '2026-07-02', '2026-07-02 09:50:00', '2026-07-02 19:02:00', 'PRESENT', 8, 0, 4, '2026-07-03 17:33:00'),
+  (19, 1, '2026-07-03', '2026-07-03 09:55:00', '2026-07-03 20:12:00', 'PRESENT', 8, 1, 4, '2026-07-04 17:30:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (20, 1, '2026-07-04', 'WEEK_OFF', 0, 0, 4, '2026-07-05 17:34:00'),
+  (21, 1, '2026-07-05', 'WEEK_OFF', 0, 0, 4, '2026-07-06 17:12:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (22, 1, '2026-07-06', '2026-07-06 09:58:00', '2026-07-06 19:05:00', 'PRESENT', 8, 0, 4, '2026-07-07 17:14:00'),
+  (23, 1, '2026-07-07', '2026-07-07 09:08:00', '2026-07-07 18:24:00', 'PRESENT', 8, 0, 4, '2026-07-08 17:19:00'),
+  (24, 1, '2026-07-08', '2026-07-08 08:14:00', '2026-07-08 17:31:00', 'PRESENT', 8, 0, 4, '2026-07-09 17:24:00'),
+  (25, 1, '2026-07-09', '2026-07-09 08:06:00', '2026-07-09 18:12:00', 'PRESENT', 8, 1, 4, '2026-07-10 18:41:00'),
+  (26, 1, '2026-07-10', '2026-07-10 09:53:00', '2026-07-10 20:05:00', 'PRESENT', 8, 1, 4, '2026-07-11 18:23:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (27, 1, '2026-07-11', 'WEEK_OFF', 0, 0, 4, '2026-07-12 17:55:00'),
+  (28, 1, '2026-07-12', 'WEEK_OFF', 0, 0, 4, '2026-07-13 17:08:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (29, 1, '2026-07-13', '2026-07-13 09:31:00', '2026-07-13 19:36:00', 'PRESENT', 8, 1, 4, '2026-07-14 17:36:00'),
+  (30, 1, '2026-07-14', '2026-07-14 09:09:00', '2026-07-14 18:45:00', 'PRESENT', 8, 0.5, 4, '2026-07-15 17:02:00'),
+  (31, 1, '2026-07-15', '2026-07-15 09:01:00', '2026-07-15 18:08:00', 'PRESENT', 8, 0, 4, '2026-07-16 18:47:00'),
+  (32, 1, '2026-07-16', '2026-07-16 09:58:00', '2026-07-16 19:10:00', 'PRESENT', 8, 0, 4, '2026-07-17 18:02:00'),
+  (33, 1, '2026-07-17', '2026-07-17 08:58:00', '2026-07-17 19:14:00', 'PRESENT', 8, 1, 4, '2026-07-18 17:37:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (34, 1, '2026-07-18', 'WEEK_OFF', 0, 0, 4, '2026-07-19 18:05:00'),
+  (35, 1, '2026-07-19', 'WEEK_OFF', 0, 0, 4, '2026-07-20 17:01:00'),
+  (36, 1, '2026-07-20', 'LEAVE', 0, 0, 4, '2026-07-21 17:44:00'),
+  (37, 1, '2026-07-21', 'LEAVE', 0, 0, 4, '2026-07-22 17:02:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (38, 1, '2026-07-22', '2026-07-22 08:09:00', '2026-07-22 18:11:00', 'PRESENT', 8, 1, 4, '2026-07-23 18:15:00'),
+  (39, 1, '2026-07-23', '2026-07-23 09:35:00', '2026-07-23 19:25:00', 'PRESENT', 8, 0.5, 4, '2026-07-24 17:02:00'),
+  (40, 1, '2026-07-24', '2026-07-24 09:39:00', '2026-07-24 18:58:00', 'PRESENT', 8, 0, 4, '2026-07-25 17:37:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (41, 1, '2026-07-25', 'WEEK_OFF', 0, 0, 4, '2026-07-26 17:00:00'),
+  (42, 1, '2026-07-26', 'WEEK_OFF', 0, 0, 4, '2026-07-27 17:40:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (43, 1, '2026-07-27', '2026-07-27 08:17:00', '2026-07-27 17:18:00', 'PRESENT', 8, 0, 4, '2026-07-28 18:39:00'),
+  (44, 1, '2026-07-28', '2026-07-28 09:43:00', '2026-07-28 18:47:00', 'PRESENT', 8, 0, 4, '2026-07-29 17:39:00'),
+  (45, 1, '2026-07-29', '2026-07-29 09:33:00', '2026-07-29 18:44:00', 'PRESENT', 8, 0, 4, '2026-07-30 18:26:00'),
+  (46, 1, '2026-07-30', '2026-07-30 08:15:00', '2026-07-30 17:25:00', 'PRESENT', 8, 0, 4, '2026-07-31 18:45:00'),
+  (47, 1, '2026-07-31', '2026-07-31 08:06:00', '2026-07-31 17:38:00', 'PRESENT', 8, 0.5, 4, '2026-08-01 18:08:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (48, 1, '2026-08-01', 'WEEK_OFF', 0, 0, 4, '2026-08-02 17:19:00'),
+  (49, 1, '2026-08-02', 'WEEK_OFF', 0, 0, 4, '2026-08-03 18:08:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (50, 1, '2026-08-03', '2026-08-03 08:55:00', '2026-08-03 18:28:00', 'PRESENT', 8, 0.5, 4, '2026-08-04 17:57:00'),
+  (51, 1, '2026-08-04', '2026-08-04 08:32:00', '2026-08-04 18:11:00', 'PRESENT', 8, 0.5, 4, '2026-08-05 18:54:00'),
+  (52, 1, '2026-08-05', '2026-08-05 09:09:00', '2026-08-05 18:47:00', 'PRESENT', 8, 0.5, 4, '2026-08-06 17:28:00'),
+  (53, 1, '2026-08-06', '2026-08-06 08:44:00', '2026-08-06 17:53:00', 'PRESENT', 8, 0, 4, '2026-08-07 17:33:00'),
+  (54, 1, '2026-08-07', '2026-08-07 09:58:00', '2026-08-07 19:36:00', 'PRESENT', 8, 0.5, 4, '2026-08-08 17:51:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (55, 1, '2026-08-08', 'WEEK_OFF', 0, 0, 4, '2026-08-09 18:23:00'),
+  (56, 1, '2026-08-09', 'WEEK_OFF', 0, 0, 4, '2026-08-10 17:56:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (57, 1, '2026-08-10', '2026-08-10 09:49:00', '2026-08-10 18:54:00', 'PRESENT', 8, 0, 4, '2026-08-11 18:42:00'),
+  (58, 1, '2026-08-11', '2026-08-11 08:22:00', '2026-08-11 17:57:00', 'PRESENT', 8, 0.5, 4, '2026-08-12 17:45:00'),
+  (59, 1, '2026-08-12', '2026-08-12 08:46:00', '2026-08-12 17:59:00', 'PRESENT', 8, 0, 4, '2026-08-13 17:57:00'),
+  (60, 1, '2026-08-13', '2026-08-13 08:51:00', '2026-08-13 18:22:00', 'PRESENT', 8, 0.5, 4, '2026-08-14 18:34:00'),
+  (61, 1, '2026-08-14', '2026-08-14 08:56:00', '2026-08-14 18:09:00', 'PRESENT', 8, 0, 4, '2026-08-15 18:04:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (62, 1, '2026-08-15', 'WEEK_OFF', 0, 0, 4, '2026-08-16 18:52:00'),
+  (63, 1, '2026-08-16', 'WEEK_OFF', 0, 0, 4, '2026-08-17 18:41:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (64, 1, '2026-08-17', '2026-08-17 08:17:00', '2026-08-17 17:19:00', 'PRESENT', 8, 0, 4, '2026-08-18 17:22:00'),
+  (65, 1, '2026-08-18', '2026-08-18 09:57:00', '2026-08-18 18:57:00', 'PRESENT', 8, 0, 4, '2026-08-19 18:00:00'),
+  (66, 1, '2026-08-19', '2026-08-19 09:22:00', '2026-08-19 18:40:00', 'PRESENT', 8, 0, 4, '2026-08-20 18:03:00'),
+  (67, 1, '2026-08-20', '2026-08-20 08:57:00', '2026-08-20 18:13:00', 'PRESENT', 8, 0, 4, '2026-08-21 18:52:00'),
+  (68, 1, '2026-08-21', '2026-08-21 09:01:00', '2026-08-21 18:13:00', 'PRESENT', 8, 0, 4, '2026-08-22 17:16:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (69, 1, '2026-08-22', 'WEEK_OFF', 0, 0, 4, '2026-08-23 17:20:00'),
+  (70, 1, '2026-08-23', 'WEEK_OFF', 0, 0, 4, '2026-08-24 17:58:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (71, 1, '2026-08-24', '2026-08-24 09:51:00', '2026-08-24 19:03:00', 'PRESENT', 8, 0, 4, '2026-08-25 17:30:00'),
+  (72, 1, '2026-08-25', '2026-08-25 09:54:00', '2026-08-25 19:29:00', 'PRESENT', 8, 0.5, 4, '2026-08-26 17:48:00'),
+  (73, 1, '2026-08-26', '2026-08-26 09:59:00', '2026-08-26 19:03:00', 'PRESENT', 8, 0, 4, '2026-08-27 17:33:00'),
+  (74, 1, '2026-08-27', '2026-08-27 09:17:00', '2026-08-27 18:29:00', 'PRESENT', 8, 0, 4, '2026-08-28 18:23:00'),
+  (75, 1, '2026-08-28', '2026-08-28 09:53:00', '2026-08-28 20:09:00', 'PRESENT', 8, 1, 4, '2026-08-29 17:02:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (76, 1, '2026-08-29', 'WEEK_OFF', 0, 0, 4, '2026-08-30 18:24:00'),
+  (77, 1, '2026-08-30', 'WEEK_OFF', 0, 0, 4, '2026-08-31 17:25:00'),
+  (78, 1, '2026-08-31', 'ABSENT', 0, 0, 4, '2026-09-01 18:01:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (79, 1, '2026-09-01', '2026-09-01 08:07:00', '2026-09-01 18:22:00', 'PRESENT', 8, 1, 4, '2026-09-02 18:37:00'),
+  (80, 1, '2026-09-02', '2026-09-02 09:02:00', '2026-09-02 18:04:00', 'PRESENT', 8, 0, 4, '2026-09-03 18:22:00'),
+  (81, 1, '2026-09-03', '2026-09-03 09:13:00', '2026-09-03 19:02:00', 'PRESENT', 8, 0.5, 4, '2026-09-04 18:49:00'),
+  (82, 1, '2026-09-04', '2026-09-04 08:03:00', '2026-09-04 17:33:00', 'PRESENT', 8, 0.5, 4, '2026-09-05 17:11:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (83, 1, '2026-09-05', 'WEEK_OFF', 0, 0, 4, '2026-09-06 18:28:00'),
+  (84, 1, '2026-09-06', 'WEEK_OFF', 0, 0, 4, '2026-09-07 17:03:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (85, 1, '2026-09-07', '2026-09-07 09:46:00', '2026-09-07 19:57:00', 'PRESENT', 8, 1, 4, '2026-09-08 18:59:00'),
+  (86, 1, '2026-09-08', '2026-09-08 09:50:00', '2026-09-08 18:57:00', 'PRESENT', 8, 0, 4, '2026-09-09 18:23:00'),
+  (87, 1, '2026-09-09', '2026-09-09 09:20:00', '2026-09-09 19:08:00', 'PRESENT', 8, 0.5, 4, '2026-09-10 18:44:00'),
+  (88, 1, '2026-09-10', '2026-09-10 09:08:00', '2026-09-10 18:49:00', 'PRESENT', 8, 0.5, 4, '2026-09-11 18:33:00'),
+  (89, 1, '2026-09-11', '2026-09-11 08:16:00', '2026-09-11 17:49:00', 'PRESENT', 8, 0.5, 4, '2026-09-12 18:01:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (90, 1, '2026-09-12', 'WEEK_OFF', 0, 0, 4, '2026-09-13 17:31:00'),
+  (91, 1, '2026-09-13', 'WEEK_OFF', 0, 0, 4, '2026-09-14 18:23:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (92, 1, '2026-09-14', '2026-09-14 08:45:00', '2026-09-14 17:48:00', 'PRESENT', 8, 0, 4, '2026-09-15 18:44:00'),
+  (93, 1, '2026-09-15', '2026-09-15 09:57:00', '2026-09-15 19:10:00', 'PRESENT', 8, 0, 4, '2026-09-16 17:19:00'),
+  (94, 1, '2026-09-16', '2026-09-16 08:59:00', '2026-09-16 19:18:00', 'PRESENT', 8, 1, 4, '2026-09-17 17:38:00'),
+  (95, 1, '2026-09-17', '2026-09-17 08:58:00', '2026-09-17 18:13:00', 'PRESENT', 8, 0, 4, '2026-09-18 18:30:00'),
+  (96, 1, '2026-09-18', '2026-09-18 08:06:00', '2026-09-18 12:06:00', 'HALF_DAY', 4, 0, 4, '2026-09-19 17:24:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (97, 1, '2026-09-19', 'WEEK_OFF', 0, 0, 4, '2026-09-20 18:08:00'),
+  (98, 1, '2026-09-20', 'WEEK_OFF', 0, 0, 4, '2026-09-21 18:00:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (99, 1, '2026-09-21', '2026-09-21 09:40:00', '2026-09-21 19:00:00', 'PRESENT', 8, 0, 4, '2026-09-22 17:59:00'),
+  (100, 1, '2026-09-22', '2026-09-22 09:16:00', '2026-09-22 18:57:00', 'PRESENT', 8, 0.5, 4, '2026-09-23 18:12:00'),
+  (101, 1, '2026-09-23', '2026-09-23 09:58:00', '2026-09-23 19:11:00', 'PRESENT', 8, 0, 4, '2026-09-24 17:46:00'),
+  (102, 1, '2026-09-24', '2026-09-24 08:31:00', '2026-09-24 18:38:00', 'PRESENT', 8, 1, 4, '2026-09-25 17:38:00'),
+  (103, 1, '2026-09-25', '2026-09-25 08:29:00', '2026-09-25 17:35:00', 'PRESENT', 8, 0, 4, '2026-09-26 18:47:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (104, 1, '2026-09-26', 'WEEK_OFF', 0, 0, 4, '2026-09-27 18:56:00'),
+  (105, 1, '2026-09-27', 'WEEK_OFF', 0, 0, 4, '2026-09-28 17:36:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (106, 1, '2026-09-28', '2026-09-28 09:15:00', '2026-09-28 18:24:00', 'PRESENT', 8, 0, 4, '2026-09-29 18:02:00'),
+  (107, 1, '2026-09-29', '2026-09-29 09:07:00', '2026-09-29 18:27:00', 'PRESENT', 8, 0, 4, '2026-09-30 17:33:00'),
+  (108, 1, '2026-09-30', '2026-09-30 09:11:00', '2026-09-30 18:17:00', 'PRESENT', 8, 0, 4, '2026-10-01 17:41:00'),
+  (109, 1, '2026-10-01', '2026-10-01 09:05:00', '2026-10-01 18:13:00', 'PRESENT', 8, 0, 4, '2026-10-02 17:21:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (110, 1, '2026-10-02', 'HOLIDAY', 0, 0, 4, '2026-10-03 18:58:00'),
+  (111, 1, '2026-10-03', 'WEEK_OFF', 0, 0, 4, '2026-10-04 17:03:00'),
+  (112, 1, '2026-10-04', 'WEEK_OFF', 0, 0, 4, '2026-10-05 17:33:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (113, 1, '2026-10-05', '2026-10-05 08:46:00', '2026-10-05 17:50:00', 'PRESENT', 8, 0, 4, '2026-10-06 18:20:00'),
+  (114, 1, '2026-10-06', '2026-10-06 09:32:00', '2026-10-06 18:47:00', 'PRESENT', 8, 0, 4, '2026-10-07 18:28:00'),
+  (115, 1, '2026-10-07', '2026-10-07 09:51:00', '2026-10-07 19:11:00', 'PRESENT', 8, 0, 4, '2026-10-08 18:14:00'),
+  (116, 1, '2026-10-08', '2026-10-08 09:52:00', '2026-10-08 20:07:00', 'PRESENT', 8, 1, 4, '2026-10-09 17:47:00'),
+  (117, 1, '2026-10-09', '2026-10-09 09:26:00', '2026-10-09 18:31:00', 'PRESENT', 8, 0, 4, '2026-10-10 18:14:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (118, 1, '2026-10-10', 'WEEK_OFF', 0, 0, 4, '2026-10-11 18:35:00'),
+  (119, 1, '2026-10-11', 'WEEK_OFF', 0, 0, 4, '2026-10-12 17:56:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (120, 1, '2026-10-12', '2026-10-12 09:31:00', '2026-10-12 19:08:00', 'PRESENT', 8, 0.5, 4, '2026-10-13 18:29:00'),
+  (121, 1, '2026-10-13', '2026-10-13 09:14:00', '2026-10-13 18:20:00', 'PRESENT', 8, 0, 4, '2026-10-14 17:04:00'),
+  (122, 1, '2026-10-14', '2026-10-14 09:53:00', '2026-10-14 19:00:00', 'PRESENT', 8, 0, 4, '2026-10-15 17:13:00'),
+  (123, 1, '2026-10-15', '2026-10-15 08:52:00', '2026-10-15 18:56:00', 'PRESENT', 8, 1, 4, '2026-10-16 18:58:00'),
+  (124, 1, '2026-10-16', '2026-10-16 09:58:00', '2026-10-16 19:10:00', 'PRESENT', 8, 0, 4, '2026-10-17 18:53:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (125, 1, '2026-10-17', 'WEEK_OFF', 0, 0, 4, '2026-10-18 18:18:00'),
+  (126, 1, '2026-10-18', 'WEEK_OFF', 0, 0, 4, '2026-10-19 18:36:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (127, 1, '2026-10-19', '2026-10-19 09:21:00', '2026-10-19 19:08:00', 'PRESENT', 8, 0.5, 4, '2026-10-20 17:24:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (128, 1, '2026-10-20', 'LEAVE', 0, 0, 4, '2026-10-21 17:22:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (129, 1, '2026-10-21', '2026-10-21 09:27:00', '2026-10-21 19:08:00', 'PRESENT', 8, 0.5, 4, '2026-10-22 18:15:00'),
+  (130, 1, '2026-10-22', '2026-10-22 09:53:00', '2026-10-22 19:42:00', 'PRESENT', 8, 0.5, 4, '2026-10-23 17:17:00'),
+  (131, 1, '2026-10-23', '2026-10-23 08:32:00', '2026-10-23 18:03:00', 'PRESENT', 8, 0.5, 4, '2026-10-24 18:24:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (132, 1, '2026-10-24', 'WEEK_OFF', 0, 0, 4, '2026-10-25 18:34:00'),
+  (133, 1, '2026-10-25', 'WEEK_OFF', 0, 0, 4, '2026-10-26 18:54:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (134, 1, '2026-10-26', '2026-10-26 08:30:00', '2026-10-26 18:10:00', 'PRESENT', 8, 0.5, 4, '2026-10-27 17:40:00'),
+  (135, 1, '2026-10-27', '2026-10-27 08:51:00', '2026-10-27 18:34:00', 'PRESENT', 8, 0.5, 4, '2026-10-28 18:03:00'),
+  (136, 1, '2026-10-28', '2026-10-28 09:53:00', '2026-10-28 19:23:00', 'PRESENT', 8, 0.5, 4, '2026-10-29 17:07:00'),
+  (137, 1, '2026-10-29', '2026-10-29 09:59:00', '2026-10-29 19:08:00', 'PRESENT', 8, 0, 4, '2026-10-30 18:29:00'),
+  (138, 1, '2026-10-30', '2026-10-30 09:53:00', '2026-10-30 18:57:00', 'PRESENT', 8, 0, 4, '2026-10-31 18:12:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (139, 1, '2026-10-31', 'WEEK_OFF', 0, 0, 4, '2026-11-01 17:17:00'),
+  (140, 1, '2026-11-01', 'WEEK_OFF', 0, 0, 4, '2026-11-02 18:52:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (141, 1, '2026-11-02', '2026-11-02 09:27:00', '2026-11-02 18:47:00', 'PRESENT', 8, 0, 4, '2026-11-03 18:33:00'),
+  (142, 1, '2026-11-03', '2026-11-03 09:38:00', '2026-11-03 18:48:00', 'PRESENT', 8, 0, 4, '2026-11-04 18:42:00'),
+  (143, 1, '2026-11-04', '2026-11-04 09:58:00', '2026-11-04 20:04:00', 'PRESENT', 8, 1, 4, '2026-11-05 17:10:00'),
+  (144, 1, '2026-11-05', '2026-11-05 08:02:00', '2026-11-05 17:16:00', 'PRESENT', 8, 0, 4, '2026-11-06 18:29:00'),
+  (145, 1, '2026-11-06', '2026-11-06 09:06:00', '2026-11-06 18:21:00', 'PRESENT', 8, 0, 4, '2026-11-07 18:58:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (146, 1, '2026-11-07', 'WEEK_OFF', 0, 0, 4, '2026-11-08 18:20:00'),
+  (147, 1, '2026-11-08', 'WEEK_OFF', 0, 0, 4, '2026-11-09 17:02:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (148, 1, '2026-11-09', '2026-11-09 08:11:00', '2026-11-09 18:13:00', 'PRESENT', 8, 1, 4, '2026-11-10 18:39:00'),
+  (149, 1, '2026-11-10', '2026-11-10 09:10:00', '2026-11-10 18:20:00', 'PRESENT', 8, 0, 4, '2026-11-11 17:22:00'),
+  (150, 1, '2026-11-11', '2026-11-11 09:04:00', '2026-11-11 18:11:00', 'PRESENT', 8, 0, NULL, NULL),
+  (151, 1, '2026-11-12', '2026-11-12 09:05:00', '2026-11-12 18:05:00', 'PRESENT', 8, 0, NULL, NULL),
+  (152, 1, '2026-11-13', '2026-11-13 09:51:00', '2026-11-13 18:51:00', 'PRESENT', 8, 0, NULL, NULL);
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (153, 1, '2026-11-14', 'WEEK_OFF', 0, 0, NULL, NULL),
+  (154, 1, '2026-11-15', 'WEEK_OFF', 0, 0, NULL, NULL);
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (155, 1, '2026-11-16', '2026-11-16 08:10:00', '2026-11-16 17:49:00', 'PRESENT', 8, 0.5, NULL, NULL),
+  (156, 1, '2026-11-17', '2026-11-17 08:08:00', '2026-11-17 17:19:00', 'PRESENT', 8, 0, NULL, NULL),
+  (157, 1, '2026-11-18', '2026-11-18 08:50:00', '2026-11-18 19:08:00', 'PRESENT', 8, 1, NULL, NULL),
+  (158, 2, '2026-09-01', '2026-09-01 08:00:00', '2026-09-01 18:03:00', 'PRESENT', 8, 1, 11, '2026-09-02 18:18:00'),
+  (159, 2, '2026-09-02', '2026-09-02 09:54:00', '2026-09-02 19:35:00', 'PRESENT', 8, 0.5, 11, '2026-09-03 17:19:00'),
+  (160, 2, '2026-09-03', '2026-09-03 09:10:00', '2026-09-03 18:19:00', 'PRESENT', 8, 0, 11, '2026-09-04 17:57:00'),
+  (161, 2, '2026-09-04', '2026-09-04 09:54:00', '2026-09-04 19:57:00', 'PRESENT', 8, 1, 11, '2026-09-05 18:23:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (162, 2, '2026-09-05', 'WEEK_OFF', 0, 0, 11, '2026-09-06 17:04:00'),
+  (163, 2, '2026-09-06', 'WEEK_OFF', 0, 0, 11, '2026-09-07 17:21:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (164, 2, '2026-09-07', '2026-09-07 08:33:00', '2026-09-07 17:39:00', 'PRESENT', 8, 0, 11, '2026-09-08 18:27:00'),
+  (165, 2, '2026-09-08', '2026-09-08 09:43:00', '2026-09-08 18:48:00', 'PRESENT', 8, 0, 11, '2026-09-09 18:34:00'),
+  (166, 2, '2026-09-09', '2026-09-09 09:15:00', '2026-09-09 19:03:00', 'PRESENT', 8, 0.5, 11, '2026-09-10 17:25:00'),
+  (167, 2, '2026-09-10', '2026-09-10 09:09:00', '2026-09-10 18:24:00', 'PRESENT', 8, 0, 11, '2026-09-11 17:15:00'),
+  (168, 2, '2026-09-11', '2026-09-11 09:51:00', '2026-09-11 19:03:00', 'PRESENT', 8, 0, 11, '2026-09-12 18:45:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (169, 2, '2026-09-12', 'WEEK_OFF', 0, 0, 11, '2026-09-13 17:37:00'),
+  (170, 2, '2026-09-13', 'WEEK_OFF', 0, 0, 11, '2026-09-14 17:22:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (171, 2, '2026-09-14', '2026-09-14 08:59:00', '2026-09-14 18:04:00', 'PRESENT', 8, 0, 11, '2026-09-15 18:16:00'),
+  (172, 2, '2026-09-15', '2026-09-15 09:35:00', '2026-09-15 18:41:00', 'PRESENT', 8, 0, 11, '2026-09-16 18:58:00'),
+  (173, 2, '2026-09-16', '2026-09-16 08:35:00', '2026-09-16 18:25:00', 'PRESENT', 8, 0.5, 11, '2026-09-17 17:04:00'),
+  (174, 2, '2026-09-17', '2026-09-17 08:14:00', '2026-09-17 17:17:00', 'PRESENT', 8, 0, 11, '2026-09-18 17:30:00'),
+  (175, 2, '2026-09-18', '2026-09-18 09:25:00', '2026-09-18 18:39:00', 'PRESENT', 8, 0, 11, '2026-09-19 18:10:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (176, 2, '2026-09-19', 'WEEK_OFF', 0, 0, 11, '2026-09-20 17:10:00'),
+  (177, 2, '2026-09-20', 'WEEK_OFF', 0, 0, 11, '2026-09-21 17:55:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (178, 2, '2026-09-21', '2026-09-21 08:38:00', '2026-09-21 17:44:00', 'PRESENT', 8, 0, 11, '2026-09-22 17:48:00'),
+  (179, 2, '2026-09-22', '2026-09-22 09:33:00', '2026-09-22 19:53:00', 'PRESENT', 8, 1, 11, '2026-09-23 17:26:00'),
+  (180, 2, '2026-09-23', '2026-09-23 08:52:00', '2026-09-23 18:33:00', 'PRESENT', 8, 0.5, 11, '2026-09-24 18:03:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (181, 2, '2026-09-24', 'LEAVE', 0, 0, 11, '2026-09-25 17:05:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (182, 2, '2026-09-25', '2026-09-25 08:20:00', '2026-09-25 17:24:00', 'PRESENT', 8, 0, 11, '2026-09-26 18:27:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (183, 2, '2026-09-26', 'WEEK_OFF', 0, 0, 11, '2026-09-27 18:20:00'),
+  (184, 2, '2026-09-27', 'WEEK_OFF', 0, 0, 11, '2026-09-28 17:49:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (185, 2, '2026-09-28', '2026-09-28 09:54:00', '2026-09-28 19:42:00', 'PRESENT', 8, 0.5, 11, '2026-09-29 18:26:00'),
+  (186, 2, '2026-09-29', '2026-09-29 08:11:00', '2026-09-29 17:23:00', 'PRESENT', 8, 0, 11, '2026-09-30 18:53:00'),
+  (187, 2, '2026-09-30', '2026-09-30 09:10:00', '2026-09-30 18:24:00', 'PRESENT', 8, 0, 11, '2026-10-01 18:11:00'),
+  (188, 2, '2026-10-01', '2026-10-01 09:47:00', '2026-10-01 19:28:00', 'PRESENT', 8, 0.5, 11, '2026-10-02 17:06:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (189, 2, '2026-10-02', 'HOLIDAY', 0, 0, 11, '2026-10-03 18:41:00'),
+  (190, 2, '2026-10-03', 'WEEK_OFF', 0, 0, 11, '2026-10-04 18:50:00'),
+  (191, 2, '2026-10-04', 'WEEK_OFF', 0, 0, 11, '2026-10-05 17:49:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (192, 2, '2026-10-05', '2026-10-05 09:07:00', '2026-10-05 18:07:00', 'PRESENT', 8, 0, 11, '2026-10-06 17:22:00'),
+  (193, 2, '2026-10-06', '2026-10-06 09:54:00', '2026-10-06 19:14:00', 'PRESENT', 8, 0, 11, '2026-10-07 18:54:00'),
+  (194, 2, '2026-10-07', '2026-10-07 09:33:00', '2026-10-07 18:33:00', 'PRESENT', 8, 0, 11, '2026-10-08 18:07:00'),
+  (195, 2, '2026-10-08', '2026-10-08 08:58:00', '2026-10-08 17:59:00', 'PRESENT', 8, 0, 11, '2026-10-09 18:40:00'),
+  (196, 2, '2026-10-09', '2026-10-09 08:41:00', '2026-10-09 18:01:00', 'PRESENT', 8, 0, 11, '2026-10-10 17:52:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (197, 2, '2026-10-10', 'WEEK_OFF', 0, 0, 11, '2026-10-11 18:37:00'),
+  (198, 2, '2026-10-11', 'WEEK_OFF', 0, 0, 11, '2026-10-12 18:35:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (199, 2, '2026-10-12', '2026-10-12 09:45:00', '2026-10-12 18:46:00', 'PRESENT', 8, 0, 11, '2026-10-13 17:51:00'),
+  (200, 2, '2026-10-13', '2026-10-13 08:58:00', '2026-10-13 18:34:00', 'PRESENT', 8, 0.5, 11, '2026-10-14 17:56:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (201, 2, '2026-10-14', 'LEAVE', 0, 0, 11, '2026-10-15 17:56:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (202, 2, '2026-10-15', '2026-10-15 09:08:00', '2026-10-15 18:47:00', 'PRESENT', 8, 0.5, 11, '2026-10-16 18:19:00'),
+  (203, 2, '2026-10-16', '2026-10-16 08:09:00', '2026-10-16 17:26:00', 'PRESENT', 8, 0, 11, '2026-10-17 18:08:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (204, 2, '2026-10-17', 'WEEK_OFF', 0, 0, 11, '2026-10-18 17:54:00'),
+  (205, 2, '2026-10-18', 'WEEK_OFF', 0, 0, 11, '2026-10-19 18:28:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (206, 2, '2026-10-19', '2026-10-19 09:47:00', '2026-10-19 20:01:00', 'PRESENT', 8, 1, 11, '2026-10-20 17:41:00'),
+  (207, 2, '2026-10-20', '2026-10-20 09:21:00', '2026-10-20 19:07:00', 'PRESENT', 8, 0.5, 11, '2026-10-21 18:04:00'),
+  (208, 2, '2026-10-21', '2026-10-21 09:57:00', '2026-10-21 19:04:00', 'PRESENT', 8, 0, 11, '2026-10-22 17:04:00'),
+  (209, 2, '2026-10-22', '2026-10-22 09:30:00', '2026-10-22 18:38:00', 'PRESENT', 8, 0, 11, '2026-10-23 18:24:00'),
+  (210, 2, '2026-10-23', '2026-10-23 09:22:00', '2026-10-23 18:24:00', 'PRESENT', 8, 0, 11, '2026-10-24 18:15:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (211, 2, '2026-10-24', 'WEEK_OFF', 0, 0, 11, '2026-10-25 18:28:00'),
+  (212, 2, '2026-10-25', 'WEEK_OFF', 0, 0, 11, '2026-10-26 18:53:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (213, 2, '2026-10-26', '2026-10-26 08:01:00', '2026-10-26 17:17:00', 'PRESENT', 8, 0, 11, '2026-10-27 18:59:00'),
+  (214, 2, '2026-10-27', '2026-10-27 09:58:00', '2026-10-27 19:40:00', 'PRESENT', 8, 0.5, 11, '2026-10-28 18:07:00'),
+  (215, 2, '2026-10-28', '2026-10-28 09:34:00', '2026-10-28 18:37:00', 'PRESENT', 8, 0, 11, '2026-10-29 17:16:00'),
+  (216, 2, '2026-10-29', '2026-10-29 09:56:00', '2026-10-29 19:00:00', 'PRESENT', 8, 0, 11, '2026-10-30 18:01:00'),
+  (217, 2, '2026-10-30', '2026-10-30 08:26:00', '2026-10-30 17:43:00', 'PRESENT', 8, 0, 11, '2026-10-31 17:46:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (218, 2, '2026-10-31', 'WEEK_OFF', 0, 0, 11, '2026-11-01 17:15:00'),
+  (219, 2, '2026-11-01', 'WEEK_OFF', 0, 0, 11, '2026-11-02 18:05:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (220, 2, '2026-11-02', '2026-11-02 09:58:00', '2026-11-02 18:59:00', 'PRESENT', 8, 0, 11, '2026-11-03 18:10:00'),
+  (221, 2, '2026-11-03', '2026-11-03 08:58:00', '2026-11-03 18:30:00', 'PRESENT', 8, 0.5, 11, '2026-11-04 18:47:00'),
+  (222, 2, '2026-11-04', '2026-11-04 09:58:00', '2026-11-04 19:13:00', 'PRESENT', 8, 0, 11, '2026-11-05 17:20:00'),
+  (223, 2, '2026-11-05', '2026-11-05 09:59:00', '2026-11-05 13:59:00', 'HALF_DAY', 4, 0, 11, '2026-11-06 17:40:00'),
+  (224, 2, '2026-11-06', '2026-11-06 08:52:00', '2026-11-06 18:53:00', 'PRESENT', 8, 1, 11, '2026-11-07 18:09:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (225, 2, '2026-11-07', 'WEEK_OFF', 0, 0, 11, '2026-11-08 18:04:00'),
+  (226, 2, '2026-11-08', 'WEEK_OFF', 0, 0, 11, '2026-11-09 17:15:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (227, 2, '2026-11-09', '2026-11-09 08:58:00', '2026-11-09 17:59:00', 'PRESENT', 8, 0, 11, '2026-11-10 18:53:00'),
+  (228, 2, '2026-11-10', '2026-11-10 08:42:00', '2026-11-10 18:49:00', 'PRESENT', 8, 1, 11, '2026-11-11 17:57:00'),
+  (229, 2, '2026-11-11', '2026-11-11 08:04:00', '2026-11-11 17:18:00', 'PRESENT', 8, 0, NULL, NULL),
+  (230, 2, '2026-11-12', '2026-11-12 09:51:00', '2026-11-12 20:00:00', 'PRESENT', 8, 1, NULL, NULL),
+  (231, 2, '2026-11-13', '2026-11-13 09:21:00', '2026-11-13 18:52:00', 'PRESENT', 8, 0.5, NULL, NULL);
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (232, 2, '2026-11-14', 'WEEK_OFF', 0, 0, NULL, NULL),
+  (233, 2, '2026-11-15', 'WEEK_OFF', 0, 0, NULL, NULL);
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (234, 2, '2026-11-16', '2026-11-16 09:14:00', '2026-11-16 19:02:00', 'PRESENT', 8, 0.5, NULL, NULL),
+  (235, 2, '2026-11-17', '2026-11-17 09:40:00', '2026-11-17 19:21:00', 'PRESENT', 8, 0.5, NULL, NULL),
+  (236, 2, '2026-11-18', '2026-11-18 09:54:00', '2026-11-18 19:33:00', 'PRESENT', 8, 0.5, NULL, NULL),
+  (237, 3, '2026-09-01', '2026-09-01 09:02:00', '2026-09-01 18:10:00', 'PRESENT', 8, 0, 11, '2026-09-02 17:49:00'),
+  (238, 3, '2026-09-02', '2026-09-02 09:01:00', '2026-09-02 18:20:00', 'PRESENT', 8, 0, 11, '2026-09-03 18:23:00'),
+  (239, 3, '2026-09-03', '2026-09-03 09:55:00', '2026-09-03 19:05:00', 'PRESENT', 8, 0, 11, '2026-09-04 17:00:00'),
+  (240, 3, '2026-09-04', '2026-09-04 09:56:00', '2026-09-04 18:59:00', 'PRESENT', 8, 0, 11, '2026-09-05 17:43:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (241, 3, '2026-09-05', 'WEEK_OFF', 0, 0, 11, '2026-09-06 18:31:00'),
+  (242, 3, '2026-09-06', 'WEEK_OFF', 0, 0, 11, '2026-09-07 17:08:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (243, 3, '2026-09-07', '2026-09-07 09:52:00', '2026-09-07 19:00:00', 'PRESENT', 8, 0, 11, '2026-09-08 18:24:00'),
+  (244, 3, '2026-09-08', '2026-09-08 09:54:00', '2026-09-08 19:11:00', 'PRESENT', 8, 0, 11, '2026-09-09 18:14:00'),
+  (245, 3, '2026-09-09', '2026-09-09 09:56:00', '2026-09-09 18:56:00', 'PRESENT', 8, 0, 11, '2026-09-10 18:16:00'),
+  (246, 3, '2026-09-10', '2026-09-10 09:50:00', '2026-09-10 19:04:00', 'PRESENT', 8, 0, 11, '2026-09-11 17:40:00'),
+  (247, 3, '2026-09-11', '2026-09-11 09:04:00', '2026-09-11 18:10:00', 'PRESENT', 8, 0, 11, '2026-09-12 17:05:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (248, 3, '2026-09-12', 'WEEK_OFF', 0, 0, 11, '2026-09-13 18:02:00'),
+  (249, 3, '2026-09-13', 'WEEK_OFF', 0, 0, 11, '2026-09-14 17:07:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (250, 3, '2026-09-14', '2026-09-14 09:46:00', '2026-09-14 18:55:00', 'PRESENT', 8, 0, 11, '2026-09-15 18:28:00'),
+  (251, 3, '2026-09-15', '2026-09-15 08:27:00', '2026-09-15 17:39:00', 'PRESENT', 8, 0, 11, '2026-09-16 18:05:00'),
+  (252, 3, '2026-09-16', '2026-09-16 08:53:00', '2026-09-16 18:13:00', 'PRESENT', 8, 0, 11, '2026-09-17 18:35:00'),
+  (253, 3, '2026-09-17', '2026-09-17 09:29:00', '2026-09-17 18:30:00', 'PRESENT', 8, 0, 11, '2026-09-18 18:44:00'),
+  (254, 3, '2026-09-18', '2026-09-18 09:52:00', '2026-09-18 19:12:00', 'PRESENT', 8, 0, 11, '2026-09-19 18:31:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (255, 3, '2026-09-19', 'WEEK_OFF', 0, 0, 11, '2026-09-20 17:02:00'),
+  (256, 3, '2026-09-20', 'WEEK_OFF', 0, 0, 11, '2026-09-21 18:54:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (257, 3, '2026-09-21', '2026-09-21 08:53:00', '2026-09-21 17:54:00', 'PRESENT', 8, 0, 11, '2026-09-22 18:57:00'),
+  (258, 3, '2026-09-22', '2026-09-22 09:47:00', '2026-09-22 19:04:00', 'PRESENT', 8, 0, 11, '2026-09-23 17:33:00'),
+  (259, 3, '2026-09-23', '2026-09-23 09:55:00', '2026-09-23 19:13:00', 'PRESENT', 8, 0, 11, '2026-09-24 17:13:00'),
+  (260, 3, '2026-09-24', '2026-09-24 09:57:00', '2026-09-24 19:10:00', 'PRESENT', 8, 0, 11, '2026-09-25 17:51:00'),
+  (261, 3, '2026-09-25', '2026-09-25 08:27:00', '2026-09-25 17:39:00', 'PRESENT', 8, 0, 11, '2026-09-26 17:55:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (262, 3, '2026-09-26', 'WEEK_OFF', 0, 0, 11, '2026-09-27 18:01:00'),
+  (263, 3, '2026-09-27', 'WEEK_OFF', 0, 0, 11, '2026-09-28 18:48:00'),
+  (264, 3, '2026-09-28', 'LEAVE', 0, 0, 11, '2026-09-29 18:05:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (265, 3, '2026-09-29', '2026-09-29 08:53:00', '2026-09-29 18:13:00', 'PRESENT', 8, 0, 11, '2026-09-30 17:50:00'),
+  (266, 3, '2026-09-30', '2026-09-30 09:58:00', '2026-09-30 19:09:00', 'PRESENT', 8, 0, 11, '2026-10-01 18:50:00'),
+  (267, 3, '2026-10-01', '2026-10-01 08:10:00', '2026-10-01 17:15:00', 'PRESENT', 8, 0, 11, '2026-10-02 18:07:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (268, 3, '2026-10-02', 'HOLIDAY', 0, 0, 11, '2026-10-03 17:39:00'),
+  (269, 3, '2026-10-03', 'WEEK_OFF', 0, 0, 11, '2026-10-04 18:59:00'),
+  (270, 3, '2026-10-04', 'WEEK_OFF', 0, 0, 11, '2026-10-05 18:51:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (271, 3, '2026-10-05', '2026-10-05 09:52:00', '2026-10-05 19:00:00', 'PRESENT', 8, 0, 11, '2026-10-06 18:48:00'),
+  (272, 3, '2026-10-06', '2026-10-06 09:59:00', '2026-10-06 19:01:00', 'PRESENT', 8, 0, 11, '2026-10-07 18:08:00'),
+  (273, 3, '2026-10-07', '2026-10-07 08:31:00', '2026-10-07 17:47:00', 'PRESENT', 8, 0, 11, '2026-10-08 18:51:00'),
+  (274, 3, '2026-10-08', '2026-10-08 09:09:00', '2026-10-08 18:20:00', 'PRESENT', 8, 0, 11, '2026-10-09 18:02:00'),
+  (275, 3, '2026-10-09', '2026-10-09 09:58:00', '2026-10-09 19:14:00', 'PRESENT', 8, 0, 11, '2026-10-10 18:31:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (276, 3, '2026-10-10', 'WEEK_OFF', 0, 0, 11, '2026-10-11 18:15:00'),
+  (277, 3, '2026-10-11', 'WEEK_OFF', 0, 0, 11, '2026-10-12 17:04:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (278, 3, '2026-10-12', '2026-10-12 09:09:00', '2026-10-12 18:22:00', 'PRESENT', 8, 0, 11, '2026-10-13 17:58:00'),
+  (279, 3, '2026-10-13', '2026-10-13 09:42:00', '2026-10-13 18:48:00', 'PRESENT', 8, 0, 11, '2026-10-14 18:00:00'),
+  (280, 3, '2026-10-14', '2026-10-14 09:52:00', '2026-10-14 19:01:00', 'PRESENT', 8, 0, 11, '2026-10-15 17:21:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (281, 3, '2026-10-15', 'LEAVE', 0, 0, 11, '2026-10-16 18:13:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (282, 3, '2026-10-16', '2026-10-16 09:58:00', '2026-10-16 19:00:00', 'PRESENT', 8, 0, 11, '2026-10-17 17:25:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (283, 3, '2026-10-17', 'WEEK_OFF', 0, 0, 11, '2026-10-18 17:12:00'),
+  (284, 3, '2026-10-18', 'WEEK_OFF', 0, 0, 11, '2026-10-19 18:58:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (285, 3, '2026-10-19', '2026-10-19 09:53:00', '2026-10-19 19:02:00', 'PRESENT', 8, 0, 11, '2026-10-20 18:29:00'),
+  (286, 3, '2026-10-20', '2026-10-20 08:35:00', '2026-10-20 17:53:00', 'PRESENT', 8, 0, 11, '2026-10-21 17:28:00'),
+  (287, 3, '2026-10-21', '2026-10-21 09:30:00', '2026-10-21 18:34:00', 'PRESENT', 8, 0, 11, '2026-10-22 18:39:00'),
+  (288, 3, '2026-10-22', '2026-10-22 09:06:00', '2026-10-22 18:16:00', 'PRESENT', 8, 0, 11, '2026-10-23 17:53:00'),
+  (289, 3, '2026-10-23', '2026-10-23 09:07:00', '2026-10-23 18:25:00', 'PRESENT', 8, 0, 11, '2026-10-24 17:37:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (290, 3, '2026-10-24', 'WEEK_OFF', 0, 0, 11, '2026-10-25 18:03:00'),
+  (291, 3, '2026-10-25', 'WEEK_OFF', 0, 0, 11, '2026-10-26 17:10:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (292, 3, '2026-10-26', '2026-10-26 09:54:00', '2026-10-26 19:03:00', 'PRESENT', 8, 0, 11, '2026-10-27 18:23:00'),
+  (293, 3, '2026-10-27', '2026-10-27 08:56:00', '2026-10-27 18:03:00', 'PRESENT', 8, 0, 11, '2026-10-28 17:51:00'),
+  (294, 3, '2026-10-28', '2026-10-28 08:57:00', '2026-10-28 18:08:00', 'PRESENT', 8, 0, 11, '2026-10-29 17:24:00'),
+  (295, 3, '2026-10-29', '2026-10-29 09:56:00', '2026-10-29 19:05:00', 'PRESENT', 8, 0, 11, '2026-10-30 18:18:00'),
+  (296, 3, '2026-10-30', '2026-10-30 09:02:00', '2026-10-30 18:16:00', 'PRESENT', 8, 0, 11, '2026-10-31 18:19:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (297, 3, '2026-10-31', 'WEEK_OFF', 0, 0, 11, '2026-11-01 18:07:00'),
+  (298, 3, '2026-11-01', 'WEEK_OFF', 0, 0, 11, '2026-11-02 17:18:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (299, 3, '2026-11-02', '2026-11-02 08:21:00', '2026-11-02 17:39:00', 'PRESENT', 8, 0, 11, '2026-11-03 18:16:00'),
+  (300, 3, '2026-11-03', '2026-11-03 08:03:00', '2026-11-03 17:09:00', 'PRESENT', 8, 0, 11, '2026-11-04 17:25:00'),
+  (301, 3, '2026-11-04', '2026-11-04 09:14:00', '2026-11-04 18:30:00', 'PRESENT', 8, 0, 11, '2026-11-05 18:19:00'),
+  (302, 3, '2026-11-05', '2026-11-05 08:32:00', '2026-11-05 17:44:00', 'PRESENT', 8, 0, 11, '2026-11-06 17:20:00'),
+  (303, 3, '2026-11-06', '2026-11-06 08:19:00', '2026-11-06 12:19:00', 'HALF_DAY', 4, 0, 11, '2026-11-07 18:32:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (304, 3, '2026-11-07', 'WEEK_OFF', 0, 0, 11, '2026-11-08 17:43:00'),
+  (305, 3, '2026-11-08', 'WEEK_OFF', 0, 0, 11, '2026-11-09 17:13:00');
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (306, 3, '2026-11-09', '2026-11-09 09:51:00', '2026-11-09 18:54:00', 'PRESENT', 8, 0, 11, '2026-11-10 18:51:00'),
+  (307, 3, '2026-11-10', '2026-11-10 09:52:00', '2026-11-10 19:05:00', 'PRESENT', 8, 0, 11, '2026-11-11 17:58:00'),
+  (308, 3, '2026-11-11', '2026-11-11 09:41:00', '2026-11-11 18:58:00', 'PRESENT', 8, 0, NULL, NULL),
+  (309, 3, '2026-11-12', '2026-11-12 09:57:00', '2026-11-12 19:14:00', 'PRESENT', 8, 0, NULL, NULL),
+  (310, 3, '2026-11-13', '2026-11-13 08:38:00', '2026-11-13 17:54:00', 'PRESENT', 8, 0, NULL, NULL);
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (311, 3, '2026-11-14', 'WEEK_OFF', 0, 0, NULL, NULL),
+  (312, 3, '2026-11-15', 'WEEK_OFF', 0, 0, NULL, NULL);
+INSERT INTO attendance (attendance_id, deployment_id, attendance_date, check_in, check_out, attendance_status, regular_hours, overtime_hours, approved_by, approved_at) VALUES
+  (313, 3, '2026-11-16', '2026-11-16 09:52:00', '2026-11-16 18:53:00', 'PRESENT', 8, 0, NULL, NULL),
+  (314, 3, '2026-11-17', '2026-11-17 08:27:00', '2026-11-17 17:34:00', 'PRESENT', 8, 0, NULL, NULL),
+  (315, 3, '2026-11-18', '2026-11-18 09:01:00', '2026-11-18 18:09:00', 'PRESENT', 8, 0, NULL, NULL);
+
+/* ---- invoices (7 rows) ---- */
+INSERT INTO invoices (invoice_id, invoice_number, service_order_id, invoice_type, invoice_date, due_date, service_period_start, service_period_end, subtotal, discount_amount, tax_total, total_amount, status, created_by, created_at) VALUES
+  (3, 'INV-2026-003', 4, 'PLACEMENT_FEE', '2026-08-06', '2026-09-05', NULL, NULL, 81634.00, 0.00, 14694.12, 96328.12, 'DRAFT', 1, '2026-08-06 10:38:00'),
+  (4, 'INV-2026-004', 3, 'MONTHLY_SERVICE', '2026-09-02', '2026-10-02', '2026-08-01', '2026-08-31', 190400.00, 0.00, 34272.00, 224672.00, 'DRAFT', 1, '2026-09-02 11:07:00'),
+  (5, 'INV-2026-005', 5, 'PLACEMENT_FEE', '2026-09-17', '2026-11-01', NULL, NULL, 60000.00, 0.00, 10800.00, 70800.00, 'DRAFT', 1, '2026-09-17 11:05:00'),
+  (6, 'INV-2026-006', 3, 'MONTHLY_SERVICE', '2026-10-01', '2026-10-31', '2026-09-01', '2026-09-30', 190400.00, 0.00, 34272.00, 224672.00, 'DRAFT', 1, '2026-10-01 11:39:00'),
+  (7, 'INV-2026-007', 3, 'MONTHLY_SERVICE', '2026-10-02', '2026-11-01', '2026-09-01', '2026-09-30', 190400.00, 0.00, 34272.00, 224672.00, 'DRAFT', 1, '2026-10-02 10:28:00'),
+  (8, 'INV-2026-008', 3, 'MONTHLY_SERVICE', '2026-11-02', '2026-12-02', '2026-10-01', '2026-10-31', 190400.00, 0.00, 34272.00, 224672.00, 'DRAFT', 1, '2026-11-02 11:17:00'),
+  (9, 'INV-2026-009', 3, 'MONTHLY_SERVICE', '2026-11-19', '2026-12-19', '2026-11-01', '2026-11-30', 190400.00, 0.00, 34272.00, 224672.00, 'DRAFT', 1, '2026-11-19 11:57:00');
+
+/* ---- invoice_items (12 rows) ---- */
+INSERT INTO invoice_items (item_id, invoice_id, deployment_id, placement_id, description, quantity, unit_price, tax_rate) VALUES
+  (3, 3, NULL, 3, 'Recruitment fee - Data Analyst placement (Pooja Bhatt)', 1, 81634.00, 18.00),
+  (4, 4, 2, NULL, 'Contract staffing - Rohan Kulkarni (EMP-2026-002) - Aug 2026', 1, 100800.00, 18.00),
+  (5, 4, 3, NULL, 'Contract staffing - Aditi Menon (EMP-2026-003) - Aug 2026', 1, 89600.00, 18.00),
+  (6, 5, NULL, 4, 'Recruitment fee - Healthcare Data Analyst placement (Harsh Vardhan)', 1, 60000.00, 18.00),
+  (7, 6, 2, NULL, 'Contract staffing - Rohan Kulkarni (EMP-2026-002) - Sep 2026', 1, 100800.00, 18.00),
+  (8, 6, 3, NULL, 'Contract staffing - Aditi Menon (EMP-2026-003) - Sep 2026', 1, 89600.00, 18.00),
+  (9, 7, 2, NULL, 'Contract staffing - Rohan Kulkarni (EMP-2026-002) - Sep 2026', 1, 100800.00, 18.00),
+  (10, 7, 3, NULL, 'Contract staffing - Aditi Menon (EMP-2026-003) - Sep 2026', 1, 89600.00, 18.00),
+  (11, 8, 2, NULL, 'Contract staffing - Rohan Kulkarni (EMP-2026-002) - Oct 2026', 1, 100800.00, 18.00),
+  (12, 8, 3, NULL, 'Contract staffing - Aditi Menon (EMP-2026-003) - Oct 2026', 1, 89600.00, 18.00),
+  (13, 9, 2, NULL, 'Contract staffing - Rohan Kulkarni (EMP-2026-002) - Nov 2026', 1, 100800.00, 18.00),
+  (14, 9, 3, NULL, 'Contract staffing - Aditi Menon (EMP-2026-003) - Nov 2026', 1, 89600.00, 18.00);
+
+/* invoice lifecycle: DRAFT -> ISSUED (-> CANCELLED) */
+UPDATE invoices SET status = 'ISSUED' WHERE invoice_id = 3;
+UPDATE invoices SET status = 'ISSUED' WHERE invoice_id = 4;
+UPDATE invoices SET status = 'ISSUED' WHERE invoice_id = 5;
+UPDATE invoices SET status = 'ISSUED' WHERE invoice_id = 6;
+UPDATE invoices SET status = 'CANCELLED' WHERE invoice_id = 6;
+UPDATE invoices SET status = 'ISSUED' WHERE invoice_id = 7;
+UPDATE invoices SET status = 'ISSUED' WHERE invoice_id = 8;
+
+/* ---- payments (4 rows) ---- */
+INSERT INTO payments (payment_id, payment_reference, customer_id, payment_date, amount, payment_method, transaction_reference, status, created_at) VALUES
+  (3, 'PAY-2026-003', 3, '2026-08-26', 96328.12, 'BANK_TRANSFER', 'UTR-DEMO-20260826-003', 'CLEARED', '2026-08-26 10:25:00'),
+  (4, 'PAY-2026-004', 3, '2026-09-18', 224672.00, 'CHEQUE', 'CHQ-673307', 'FAILED', '2026-09-18 16:47:00'),
+  (5, 'PAY-2026-005', 3, '2026-10-28', 449344.00, 'BANK_TRANSFER', 'UTR-DEMO-20261028-005', 'CLEARED', '2026-10-28 15:55:00'),
+  (6, 'PAY-2026-006', 3, '2026-11-17', 224672.00, 'BANK_TRANSFER', 'UTR-DEMO-20261117-006', 'PENDING', '2026-11-17 13:59:00');
+
+/* ---- payment_allocations (4 rows) ---- */
+INSERT INTO payment_allocations (payment_id, invoice_id, allocated_amount) VALUES
+  (3, 3, 96328.12),
+  (5, 4, 224672.00),
+  (5, 7, 224672.00),
+  (6, 8, 224672.00);
+
+COMMIT;
+
+
+/* ===========================================================================
+   PART C (optional) - fix v_invoice_balance
+   For CANCELLED and DRAFT invoices nothing is receivable, but the original view still
+   returned balance_amount = total_amount. Same view, balance now 0 for those two states.
+   =========================================================================== */
+CREATE OR REPLACE VIEW v_invoice_balance AS
+    SELECT
+        i.invoice_id, i.invoice_number, ag.customer_id, i.service_order_id, i.invoice_date, i.due_date, i.total_amount,
+        COALESCE(SUM(CASE WHEN p.payment_id IS NOT NULL THEN pa.allocated_amount END), 0) AS paid_amount,
+        CASE WHEN i.status IN ('CANCELLED', 'DRAFT') THEN 0
+             ELSE i.total_amount - COALESCE(SUM(CASE WHEN p.payment_id IS NOT NULL THEN pa.allocated_amount END), 0)
+        END AS balance_amount,
+        CASE
+            WHEN i.status = 'CANCELLED' THEN 'CANCELLED'
+            WHEN i.status = 'DRAFT' THEN 'DRAFT'
+            WHEN COALESCE(SUM(CASE WHEN p.payment_id IS NOT NULL THEN pa.allocated_amount END), 0) >= i.total_amount THEN 'PAID'
+            WHEN i.due_date < CURRENT_DATE() THEN 'OVERDUE'
+            WHEN COALESCE(SUM(CASE WHEN p.payment_id IS NOT NULL THEN pa.allocated_amount END), 0) > 0 THEN 'PARTIALLY_PAID'
+            ELSE 'UNPAID'
+        END AS payment_status
+    FROM invoices i
+        JOIN service_orders so ON so.service_order_id = i.service_order_id
+        JOIN agreements ag ON ag.agreement_id = so.agreement_id
+        LEFT JOIN payment_allocations pa ON pa.invoice_id = i.invoice_id
+        LEFT JOIN payments p ON p.payment_id = pa.payment_id AND p.status = 'CLEARED'
+    GROUP BY i.invoice_id, i.invoice_number, ag.customer_id, i.service_order_id, i.invoice_date, i.due_date, i.total_amount, i.status;
