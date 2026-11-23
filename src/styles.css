@@ -353,3 +353,56 @@
     width: 100%;
   }
 }
+
+
+/* Admin master data forms */
+
+.customer-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.skill-picker {
+  margin: 8px 0 18px;
+}
+
+.skill-picker > span {
+  display: block;
+  margin-bottom: 10px;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.skill-picker > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.skill-option {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+  margin: 0 !important;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  background: #f8fafc;
+  font-weight: 500 !important;
+  cursor: pointer;
+}
+
+.skill-option input {
+  width: auto !important;
+  height: auto !important;
+  margin: 0 !important;
+}
+
+@media (max-width: 600px) {
+  .customer-form-row {
+    grid-template-columns: 1fr;
+  }
+}
+

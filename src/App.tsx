@@ -11,6 +11,10 @@ import ProtectedRoute from './routes/ProtectedRoute'
 import AdminRoute from './routes/AdminRoute'
 import AppLayout from './layouts/AppLayout'
 
+import UsersPage from './pages/admin/UsersPage'
+import JobProfilesPage from './pages/admin/JobProfilesPage'
+import AdminCatalogPage from './pages/admin/AdminCatalogPage'
+
 export default function App() {
   return (
     <Routes>
@@ -38,6 +42,26 @@ export default function App() {
             <Route
               path="/app/customers"
               element={<CustomersPage />}
+            />
+            <Route
+              path="/app/users"
+              element={<UsersPage />}
+            />
+            <Route
+              path="/app/job-profiles"
+              element={<JobProfilesPage />}
+            />
+            <Route
+            path="/app/skills"
+            element={<AdminCatalogPage key="skills" />}
+            />
+            <Route
+            path="/app/service-types"
+            element={<AdminCatalogPage key="service-types" />}
+            />
+            <Route
+              path="/app/catalog"
+              element={<AdminCatalogPage />}
             />
           </Route>
 

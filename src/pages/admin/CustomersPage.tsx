@@ -97,8 +97,9 @@ export default function CustomersPage() {
       const matchesSearch =
         customer.companyName.toLowerCase().includes(searchText) ||
         customer.contactPerson.toLowerCase().includes(searchText) ||
-        customer.email.toLowerCase().includes(searchText)
-
+        customer.email.toLowerCase().includes(searchText) ||
+        customer.phone.includes(searchText)
+        
       const matchesStatus =
         statusFilter === 'ALL' || customer.status === statusFilter
 

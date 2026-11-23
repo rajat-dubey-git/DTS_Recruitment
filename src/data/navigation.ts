@@ -28,6 +28,8 @@ export const navByRole: Record<Role, NavItem[]> = {
     { label: 'Customers', icon: Building2, path: '/app/customers' },
     { label: 'Users', icon: Users, path: '/app/users' },
     { label: 'Job Profiles', icon: BriefcaseBusiness, path: '/app/job-profiles' },
+    { label: 'Skills', icon: BriefcaseBusiness, path: '/app/skills' },
+    { label: 'Service Types', icon: ClipboardList, path: '/app/service-types' },
     { label: 'Requirements', icon: ClipboardList, path: '/app/requirements' },
     { label: 'Candidates', icon: UserRound, path: '/app/candidates' },
     { label: 'Interviews', icon: CalendarDays, path: '/app/interviews' },
