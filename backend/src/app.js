@@ -8,6 +8,9 @@ import invitationRoutes from './auth/invitation.routes.js'
 import requirementIntakeRoutes from './public/requirement-intake.routes.js'
 import dashboardRoutes from './dashboard/dashboard.routes.js'
 import agreementRoutes from './agreements/agreement.routes.js'
+import recruiterRoutes from './recruiter/recruiter.routes.js'
+import customerRoutes from './customer/customer.routes.js'
+import documentRoutes from './documents/document.routes.js'
 
 const app = express()
 const allowedOrigins = (process.env.CORS_ORIGIN || '')
@@ -32,6 +35,9 @@ app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
 app.use('/api/auth', authRoutes)
 app.use('/api/dashboard', dashboardRoutes)
 app.use('/api/agreements', agreementRoutes)
+app.use('/api/recruiter', recruiterRoutes)
+app.use('/api/customer', customerRoutes)
+app.use('/api/documents', documentRoutes)
 app.use('/api/admin', adminRoutes)
 app.use('/api/auth/invitations', invitationRoutes)
 app.use('/api/public', requirementIntakeRoutes)

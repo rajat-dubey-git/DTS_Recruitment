@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 import {
+  Bell,
   LogOut,
   Menu,
 } from 'lucide-react'
@@ -42,14 +43,20 @@ export default function AppLayout() {
 
       <aside className={`sidebar ${mobileNavOpen ? 'mobile-open' : ''}`}>
 
-        <div className="brand">
+        <button
+          type="button"
+          className="brand brand-link"
+          onClick={() => { void navigate('/app/dashboard') }}
+          aria-label="Go to dashboard"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', padding: 0, width: '100%' }}
+        >
           <div className="brand-mark">D</div>
 
           <div>
             <strong>DTS</strong>
             <small>Recruitment Suite</small>
           </div>
-        </div>
+        </button>
 
         <div className="nav-caption">WORKSPACE</div>
 
@@ -98,6 +105,16 @@ export default function AppLayout() {
           </div>
 
           <div className="top-actions">
+            <button
+              className="icon-button"
+              type="button"
+              title="Notifications"
+              aria-label="Notifications"
+              onClick={() => void navigate('/app/dashboard')}
+            >
+              <Bell size={17} />
+            </button>
+
             <div className="user-menu">
 
               <div className="avatar">

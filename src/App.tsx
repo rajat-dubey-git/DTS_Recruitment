@@ -6,9 +6,14 @@ import LandingPage from './pages/LandingPage'
 import LoginPage from './pages/LoginPage'
 import OperationalDashboardPage from './pages/OperationalDashboardPage'
 import AdminWorkspacePage from './pages/admin/AdminWorkspacePage'
+import AdminAgreementReviewPage from './pages/admin/AdminAgreementReviewPage'
+import CustomerAgreementsPage from './pages/CustomerAgreementsPage'
+import RecruiterWorkspacePage from './pages/RecruiterWorkspacePage'
+import CustomerCandidatesPage from './pages/CustomerCandidatesPage'
 import RequirementIntakePage from './pages/RequirementIntakePage'
 import AdminRoute from './routes/AdminRoute'
 import ProtectedRoute from './routes/ProtectedRoute'
+import CustomerRoute from './routes/CustomerRoute'
 
 export default function App() {
   return (
@@ -26,7 +31,15 @@ export default function App() {
           <Route element={<AdminRoute />}>
             <Route path="/app/admin" element={<Navigate to="/app/admin/customers" replace />} />
             <Route path="/app/admin/:module" element={<AdminWorkspacePage />} />
+            <Route path="/app/admin/agreements/:agreementId/review" element={<AdminAgreementReviewPage />} />
           </Route>
+
+          <Route element={<CustomerRoute />}>
+            <Route path="/app/agreements" element={<CustomerAgreementsPage />} />
+            <Route path="/app/candidates" element={<CustomerCandidatesPage />} />
+          </Route>
+
+          <Route path="/app/assigned-requirements" element={<RecruiterWorkspacePage />} />
 
           <Route path="/app/:section" element={<ComingSoonPage />} />
         </Route>

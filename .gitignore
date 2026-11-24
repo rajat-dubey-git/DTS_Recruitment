@@ -11,3 +11,4 @@ database_phase2_agreements.sql
 database_additive_migration.sql
 *.sql
 *.txt
+.kilo/

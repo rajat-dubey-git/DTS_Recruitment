@@ -40,6 +40,7 @@ export const navByRole: Record<Role, NavItem[]> = {
 
   CUSTOMER: [
     { label: 'Overview', icon: LayoutDashboard, path: '/app/dashboard' },
+    { label: 'Agreements', icon: FileText, path: '/app/agreements' },
     { label: 'Job Profiles', icon: BriefcaseBusiness, path: '/app/job-profiles' },
     { label: 'My Requirements', icon: ClipboardList, path: '/app/my-requirements' },
     { label: 'Candidates', icon: Users, path: '/app/candidates' },

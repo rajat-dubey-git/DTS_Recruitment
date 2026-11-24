@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Mail, Plus, Search } from 'lucide-react'
+import { Edit2, FileText, Filter, Mail, Plus, Search } from 'lucide-react'
 import { workspaceApi } from '../../api/workspace'
 import type {
   AdminModule,
@@ -14,6 +14,8 @@ import type {
 import RequirementConversionDialog from './RequirementConversionDialog'
 import AdminRequirementCreateDialog from './AdminRequirementCreateDialog'
 import WorkspaceCreateDialog from './WorkspaceCreateDialog'
+import WorkspaceEditDialog from './WorkspaceEditDialog'
+import AgreementSampleTemplateModal from '../../components/AgreementSampleTemplateModal'
 
 const PAGE_SIZE = 50
 
@@ -66,7 +68,7 @@ const moduleConfig: Record<AdminModule, {
   recruiters: {
     title: 'Recruiters',
     description: 'Recruiter accounts and their access status.',
-    inviteLabel: 'Invite recruiter',
+    inviteLabel: 'Invite user',
     columns: [
       { key: 'full_name', label: 'Name' },
       { key: 'email', label: 'Email' },
@@ -77,7 +79,7 @@ const moduleConfig: Record<AdminModule, {
   users: {
     title: 'Users',
     description: 'Portal accounts, roles, customer associations and access status.',
-    inviteLabel: 'Invite recruiter',
+    inviteLabel: 'Invite user',
     columns: [
       { key: 'full_name', label: 'Name' },
       { key: 'email', label: 'Email' },
@@ -236,6 +238,7 @@ export default function AdminWorkspacePage() {
   const [total, setTotal] = useState(0)
   const [searchText, setSearchText] = useState('')
   const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('ALL')
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -246,11 +249,20 @@ export default function AdminWorkspacePage() {
   const [inviteError, setInviteError] = useState('')
   const [invitation, setInvitation] = useState<InvitationResult | null>(null)
   const [creating, setCreating] = useState(false)
+  const [editingRecord, setEditingRecord] = useState<WorkspaceRecord | null>(null)
+  const [showSampleTemplate, setShowSampleTemplate] = useState(false)
   const [requestCustomer, setRequestCustomer] = useState<{ id: number; name: string } | null>(null)
   const [requestBusy, setRequestBusy] = useState(false)
   const [requestError, setRequestError] = useState('')
   const [requestResult, setRequestResult] = useState<RequirementIntakeResult | null>(null)
   const [conversionIntakeId, setConversionIntakeId] = useState<number | null>(null)
+
+  useEffect(() => {
+    setStatusFilter('ALL')
+    setOffset(0)
+    setSearchText('')
+    setSearch('')
+  }, [selectedModule])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -266,7 +278,12 @@ export default function AdminWorkspacePage() {
     let active = true
     setLoading(true)
     setError('')
-    workspaceApi.list(selectedModule, { limit: PAGE_SIZE, offset, search })
+    workspaceApi.list(selectedModule, {
+      limit: PAGE_SIZE,
+      offset,
+      search,
+      status: statusFilter !== 'ALL' ? statusFilter : undefined,
+    })
       .then((page) => {
         if (!active) return
         setRows(page.rows)
@@ -284,7 +301,7 @@ export default function AdminWorkspacePage() {
     return () => {
       active = false
     }
-  }, [selectedModule, offset, search, reloadKey])
+  }, [selectedModule, offset, search, statusFilter, reloadKey])
 
   const sendInvitation = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -306,7 +323,12 @@ export default function AdminWorkspacePage() {
       formElement.reset()
       if (selectedModule) {
         try {
-          const page = await workspaceApi.list(selectedModule, { limit: PAGE_SIZE, offset: 0, search })
+          const page = await workspaceApi.list(selectedModule, {
+            limit: PAGE_SIZE,
+            offset: 0,
+            search,
+            status: statusFilter !== 'ALL' ? statusFilter : undefined,
+          })
           setRows(page.rows)
           setTotal(page.total)
         } catch (refreshError) {
@@ -333,41 +355,83 @@ export default function AdminWorkspacePage() {
     <div className="dashboard">
       <div className="page-heading">
         <div>
-          <div className="eyebrow">ADMINISTRATION</div>
+          <div className="eyebrow">ADMINISTRATION — FULL CONTROL</div>
           <h1>{config.title}</h1>
           <p>{config.description}</p>
         </div>
-        {config.inviteLabel && (selectedModule === 'recruiters' || selectedModule === 'users') && (
-          <button type="button" className="btn btn-primary" onClick={() => {
-            setInviteRole('RECRUITER')
-            setInviteCustomer(null)
-            setInviteError('')
-            setInvitation(null)
-          }}>
-            <Plus size={16} /> {config.inviteLabel}
-          </button>
-        )}
-        {selectedModule && (creatableModules.has(selectedModule) || selectedModule === 'requirements') && (
-          <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
-            <Plus size={16} /> {createLabels[selectedModule]}
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {selectedModule === 'agreements' && (
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={() => setShowSampleTemplate(true)}
+              title="View Standard Sample Agreement Draft"
+            >
+              <FileText size={16} /> Sample Agreement Template
+            </button>
+          )}
+          {config.inviteLabel && (selectedModule === 'recruiters' || selectedModule === 'users') && (
+            <button type="button" className="btn btn-primary" onClick={() => {
+              setInviteRole('RECRUITER')
+              setInviteCustomer(null)
+              setInviteError('')
+              setInvitation(null)
+            }}>
+              <Plus size={16} /> Invite user
+            </button>
+          )}
+          {selectedModule && (creatableModules.has(selectedModule) || selectedModule === 'requirements') && (
+            <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
+              <Plus size={16} /> {createLabels[selectedModule]}
+            </button>
+          )}
+        </div>
       </div>
 
       <section className="panel customer-table-panel">
-        <div className="customer-toolbar">
+        <div className="customer-toolbar" style={{ flexWrap: 'wrap', gap: '1rem' }}>
           <div>
             <h3>{config.title}</h3>
             <p>{total.toLocaleString()} records</p>
           </div>
-          <div className="customer-search">
-            <Search size={16} />
-            <input
-              aria-label={`Search ${config.title}`}
-              placeholder={`Search ${config.title.toLowerCase()}...`}
-              value={searchText}
-              onChange={(event) => setSearchText(event.target.value)}
-            />
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: '#f3f4f6', padding: '0.3rem 0.6rem', borderRadius: '6px' }}>
+              <Filter size={15} color="#4b5563" />
+              <select
+                aria-label="Filter by status"
+                value={statusFilter}
+                onChange={(event) => {
+                  setStatusFilter(event.target.value)
+                  setOffset(0)
+                }}
+                style={{ background: 'transparent', border: 'none', fontSize: '0.85rem', outline: 'none', cursor: 'pointer' }}
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="ACTIVE">Active</option>
+                <option value="INACTIVE">Inactive</option>
+                <option value="DRAFT">Draft</option>
+                <option value="PENDING_APPROVAL">Pending Approval</option>
+                <option value="APPROVED">Approved</option>
+                <option value="OPEN">Open</option>
+                <option value="ON_HOLD">On Hold</option>
+                <option value="FILLED">Filled</option>
+                <option value="PENDING_SIGNATURE">Pending Signature</option>
+                <option value="COMPLETED">Completed</option>
+                <option value="CANCELLED">Cancelled</option>
+                <option value="SUBMITTED">Submitted</option>
+                <option value="CONVERTED">Converted</option>
+                <option value="EXPIRED">Expired</option>
+              </select>
+            </div>
+            <div className="customer-search">
+              <Search size={16} />
+              <input
+                aria-label={`Search ${config.title}`}
+                placeholder={`Search ${config.title.toLowerCase()}...`}
+                value={searchText}
+                onChange={(event) => setSearchText(event.target.value)}
+              />
+            </div>
           </div>
         </div>
 
@@ -377,7 +441,7 @@ export default function AdminWorkspacePage() {
             <thead>
               <tr>
                 {config.columns.map((column) => <th key={column.key}>{column.label}</th>)}
-                {(selectedModule === 'customers' || selectedModule === 'requirement-intakes' || selectedModule === 'service-orders') && <th>Actions</th>}
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -391,78 +455,104 @@ export default function AdminWorkspacePage() {
                   {config.columns.map((column) => (
                     <td key={column.key}>{display(row[column.key])}</td>
                   ))}
-                  {selectedModule === 'customers' && (
-                    <td>
+                  <td>
+                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
                       <button
                         type="button"
                         className="btn btn-outline"
-                        onClick={() => {
-                          setInviteRole('CUSTOMER')
-                          setInviteCustomer({
-                            id: Number(row.customer_id),
-                            name: String(row.company_name ?? 'customer'),
-                          })
-                          setInviteError('')
-                          setInvitation(null)
-                        }}
+                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                        onClick={() => setEditingRecord(row)}
+                        title="Edit this record (Admin Full Control)"
                       >
-                        Invite contact
+                        <Edit2 size={13} /> Edit
                       </button>
-                      <button
-                        type="button"
-                        className="btn btn-outline"
-                        onClick={() => {
-                          setRequestCustomer({
-                            id: Number(row.customer_id),
-                            name: String(row.company_name ?? 'customer'),
-                          })
-                          setRequestError('')
-                          setRequestResult(null)
-                        }}
-                      >
-                        <Mail size={14} /> Request requirement
-                      </button>
-                    </td>
-                  )}
-                  {selectedModule === 'requirement-intakes' && (
-                    <td>
-                      {row.status === 'SUBMITTED' ? (
-                        <button
-                          type="button"
+
+                      {selectedModule === 'customers' && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn btn-outline"
+                            style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                            onClick={() => {
+                              setInviteRole('CUSTOMER')
+                              setInviteCustomer({
+                                id: Number(row.customer_id),
+                                name: String(row.company_name ?? 'customer'),
+                              })
+                              setInviteError('')
+                              setInvitation(null)
+                            }}
+                          >
+                            Invite contact
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-outline"
+                            style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                            onClick={() => {
+                              setRequestCustomer({
+                                id: Number(row.customer_id),
+                                name: String(row.company_name ?? 'customer'),
+                              })
+                              setRequestError('')
+                              setRequestResult(null)
+                            }}
+                          >
+                            <Mail size={13} /> Request req
+                          </button>
+                        </>
+                      )}
+
+                      {selectedModule === 'requirement-intakes' && (
+                        row.status === 'SUBMITTED' ? (
+                          <button
+                            type="button"
+                            className="btn btn-outline"
+                            style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                            onClick={() => setConversionIntakeId(Number(row.intake_id))}
+                          >
+                            Review &amp; convert
+                          </button>
+                        ) : null
+                      )}
+
+                      {selectedModule === 'service-orders' && (
+                        row.status === 'PENDING_APPROVAL' ? (
+                          <button
+                            type="button"
+                            className="btn btn-outline"
+                            style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                            onClick={() => {
+                              void workspaceApi.approveServiceOrder(Number(row.service_order_id))
+                                .then(() => setReloadKey((value) => value + 1))
+                                .catch((approveError: unknown) => setError(approveError instanceof Error ? approveError.message : 'Unable to approve the service order.'))
+                            }}
+                          >
+                            Approve
+                          </button>
+                        ) : null
+                      )}
+
+                      {selectedModule === 'agreements' && (
+                        <Link
                           className="btn btn-outline"
-                          onClick={() => setConversionIntakeId(Number(row.intake_id))}
+                          style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                          to={`/app/admin/agreements/${row.agreement_id}/review`}
                         >
-                          Review &amp; convert
-                        </button>
-                      ) : <span>{row.status === 'CONVERTED' ? 'Converted' : '—'}</span>}
-                    </td>
-                  )}
-                  {selectedModule === 'service-orders' && (
-                    <td>
-                      {row.status === 'PENDING_APPROVAL' ? (
-                        <button
-                          type="button"
-                          className="btn btn-outline"
-                          onClick={() => {
-                            void workspaceApi.approveServiceOrder(Number(row.service_order_id))
-                              .then(() => setReloadKey((value) => value + 1))
-                              .catch((approveError: unknown) => setError(approveError instanceof Error ? approveError.message : 'Unable to approve the service order.'))
-                          }}
-                        >
-                          Approve
-                        </button>
-                      ) : <span>{row.status === 'APPROVED' || row.status === 'IN_PROGRESS' ? 'Approved' : '—'}</span>}
-                    </td>
-                  )}
+                          Review workflow
+                        </Link>
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
               {!loading && rows.length === 0 && (
-                <tr><td colSpan={config.columns.length + (selectedModule === 'customers' || selectedModule === 'requirement-intakes' || selectedModule === 'service-orders' ? 1 : 0)}>
-                  <div className="customer-empty"><strong>No records found</strong><span>Change your search or add records through the supported workflow.</span></div>
+                <tr><td colSpan={config.columns.length + 1}>
+                  <div className="customer-empty"><strong>No records found</strong><span>Change your search or filter criteria.</span></div>
                 </td></tr>
               )}
               {loading && (
-                <tr><td colSpan={config.columns.length + (selectedModule === 'customers' || selectedModule === 'requirement-intakes' || selectedModule === 'service-orders' ? 1 : 0)}>
+                <tr><td colSpan={config.columns.length + 1}>
                   <div className="customer-empty"><span>Loading records…</span></div>
                 </td></tr>
               )}
@@ -478,12 +568,13 @@ export default function AdminWorkspacePage() {
         </div>
       </section>
 
+      {/* INVITE USER MODAL */}
       {inviteRole && (
         <div className="customer-modal-overlay">
           <div className="customer-modal" role="dialog" aria-modal="true" aria-labelledby="invite-title">
             <div className="customer-modal-heading">
               <div>
-                <h2 id="invite-title">{inviteRole === 'RECRUITER' ? 'Invite recruiter' : 'Invite customer contact'}</h2>
+                <h2 id="invite-title">Invite User</h2>
                 <p>
                   {inviteCustomer ? `Account for ${inviteCustomer.name}. ` : ''}
                   The invitee chooses their own password from a one-time invitation, then signs in with this email address.
@@ -495,6 +586,20 @@ export default function AdminWorkspacePage() {
               <label>Full name *<input name="fullName" autoComplete="name" maxLength={100} required /></label>
               <label>Email address *<input name="email" type="email" autoComplete="email" maxLength={150} required /></label>
               <label>Mobile (optional)<input name="mobile" type="tel" autoComplete="tel" maxLength={16} /></label>
+              {!inviteCustomer && (
+                <label>
+                  Role *
+                  <select
+                    value={inviteRole}
+                    onChange={(event) => setInviteRole(event.target.value as InvitationRole)}
+                    required
+                  >
+                    <option value="RECRUITER">Recruiter</option>
+                    <option value="CUSTOMER">Customer contact</option>
+                    <option value="CANDIDATE">Candidate</option>
+                  </select>
+                </label>
+              )}
               {inviteError && <div className="customer-form-error" role="alert">{inviteError}</div>}
               {invitation?.invitationUrl && (
                 <div className="database-read-only" role="status">
@@ -515,6 +620,8 @@ export default function AdminWorkspacePage() {
           </div>
         </div>
       )}
+
+      {/* CREATE RECORD DIALOGS */}
       {creating && selectedModule === 'requirements' && (
         <AdminRequirementCreateDialog
           onClose={() => setCreating(false)}
@@ -536,6 +643,26 @@ export default function AdminWorkspacePage() {
           }}
         />
       )}
+
+      {/* EDIT RECORD DIALOG */}
+      {editingRecord && selectedModule && (
+        <WorkspaceEditDialog
+          module={selectedModule}
+          record={editingRecord}
+          onClose={() => setEditingRecord(null)}
+          onSaved={() => {
+            setEditingRecord(null)
+            setReloadKey((value) => value + 1)
+          }}
+        />
+      )}
+
+      {/* SAMPLE AGREEMENT TEMPLATE MODAL */}
+      {showSampleTemplate && (
+        <AgreementSampleTemplateModal onClose={() => setShowSampleTemplate(false)} />
+      )}
+
+      {/* REQUEST REQUIREMENT MODAL */}
       {requestCustomer && (
         <div className="customer-modal-overlay">
           <div className="customer-modal" role="dialog" aria-modal="true" aria-labelledby="requirement-request-title">
@@ -588,6 +715,8 @@ export default function AdminWorkspacePage() {
           </div>
         </div>
       )}
+
+      {/* CONVERT INTAKE DIALOG */}
       {conversionIntakeId !== null && (
         <RequirementConversionDialog
           intakeId={conversionIntakeId}

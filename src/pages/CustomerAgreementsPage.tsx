@@ -8,6 +8,7 @@ import type {
   AgreementListItem,
   AgreementServiceLineInput,
 } from '../api/workspace'
+import AgreementSampleTemplateModal from '../components/AgreementSampleTemplateModal'
 
 type DraftLine = {
   serviceTypeId: string
@@ -251,6 +252,7 @@ export default function CustomerAgreementsPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [showSampleTemplate, setShowSampleTemplate] = useState(false)
   const requestKey = useRef<string | null>(null)
 
   const loadData = async () => {
@@ -358,6 +360,14 @@ export default function CustomerAgreementsPage() {
           <h1>Services and agreements</h1>
           <p>Choose your services, review the draft, then sign and upload the approved PDF.</p>
         </div>
+        <button
+          type="button"
+          className="btn btn-outline"
+          onClick={() => setShowSampleTemplate(true)}
+          title="View standard agreement template and legal clauses"
+        >
+          <FileText size={15} /> Sample Agreement Template
+        </button>
       </div>
 
       {error && <div className="form-error" role="alert">{error}</div>}
@@ -531,6 +541,10 @@ export default function CustomerAgreementsPage() {
           agreementId={selectedAgreementId}
           onChanged={refreshList}
         />
+      )}
+
+      {showSampleTemplate && (
+        <AgreementSampleTemplateModal onClose={() => setShowSampleTemplate(false)} />
       )}
     </div>
   )

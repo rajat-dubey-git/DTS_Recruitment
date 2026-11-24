@@ -78,7 +78,6 @@ export default function LoginPage() {
 
             <div className="password-label">
               <label htmlFor="login-password">Password</label>
-              <span>Need help? Contact your administrator.</span>
             </div>
             <div className="password-wrap">
               <input

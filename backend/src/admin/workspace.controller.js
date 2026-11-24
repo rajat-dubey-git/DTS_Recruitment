@@ -374,6 +374,7 @@ function listOptions(req) {
   const limit = req.query.limit === undefined ? 50 : Number(req.query.limit)
   const offset = req.query.offset === undefined ? 0 : Number(req.query.offset)
   const search = req.query.search ?? ''
+  const status = req.query.status ?? ''
 
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
     throw badRequest(`limit must be an integer from 1 to ${MAX_LIMIT}.`)
@@ -385,18 +386,23 @@ function listOptions(req) {
     throw badRequest('search must be a string of 100 characters or fewer.')
   }
 
-  return { limit, offset, search: search.trim() }
+  return { limit, offset, search: search.trim(), status: typeof status === 'string' ? status.trim() : '' }
 }
 
-async function listPage(req, res, next, { columns, from, where = '1 = 1', searchColumns, orderBy }) {
+async function listPage(req, res, next, { columns, from, where = '1 = 1', searchColumns, statusColumn, orderBy }) {
   try {
-    const { limit, offset, search } = listOptions(req)
+    const { limit, offset, search, status } = listOptions(req)
     const values = []
     let filter = where
 
     if (search) {
       filter += ` AND (${searchColumns.map((column) => `${column} LIKE ?`).join(' OR ')})`
       values.push(...searchColumns.map(() => `%${search}%`))
+    }
+
+    if (status && status !== 'ALL' && statusColumn) {
+      filter += ` AND ${statusColumn} = ?`
+      values.push(status)
     }
 
     const [rows] = await pool.execute(
@@ -448,6 +454,7 @@ export function listCustomers(req, res, next) {
     columns: 'customer_id, customer_code, company_name, industry, status, payment_terms_days',
     from: 'customers',
     searchColumns: ['customer_code', 'company_name', 'industry'],
+    statusColumn: 'status',
     orderBy: 'company_name, customer_id',
   })
 }
@@ -471,6 +478,7 @@ export function listCustomerContacts(req, res, next) {
       INNER JOIN customers c ON c.customer_id = cc.customer_id
       INNER JOIN users u ON u.user_id = cc.user_id`,
     searchColumns: ['c.company_name', 'u.full_name', 'u.email', 'cc.designation'],
+    statusColumn: 'cc.status',
     orderBy: 'c.company_name, u.full_name, cc.contact_id',
   })
 }
@@ -481,6 +489,7 @@ export function listRecruiters(req, res, next) {
     from: 'users',
     where: "role = 'RECRUITER'",
     searchColumns: ['full_name', 'email'],
+    statusColumn: 'status',
     orderBy: 'full_name, user_id',
   })
 }
@@ -497,6 +506,7 @@ export function listUsers(req, res, next) {
        LIMIT 1) AS customer_company`,
     from: 'users u',
     searchColumns: ['u.full_name', 'u.email', 'u.mobile', 'u.role', 'u.status'],
+    statusColumn: 'u.status',
     orderBy: 'u.full_name, u.user_id',
   })
 }
@@ -525,6 +535,7 @@ export function listJobProfiles(req, res, next) {
       default_experience_min, default_experience_max, status`,
     from: 'job_profiles',
     searchColumns: ['profile_code', 'profile_name', 'category'],
+    statusColumn: 'status',
     orderBy: 'profile_name, job_profile_id',
   })
 }
@@ -536,6 +547,7 @@ export function listAgreements(req, res, next) {
     from: `agreements a
       INNER JOIN customers c ON c.customer_id = a.customer_id`,
     searchColumns: ['a.agreement_number', 'c.company_name', 'a.title', 'a.status'],
+    statusColumn: 'a.status',
     orderBy: 'a.created_at DESC, a.agreement_id DESC',
   })
 }
@@ -564,6 +576,7 @@ export function listServiceOrders(req, res, next) {
       INNER JOIN customers c ON c.customer_id = a.customer_id
       INNER JOIN service_types st ON st.service_type_id = so.service_type_id`,
     searchColumns: ['so.order_number', 'a.agreement_number', 'c.company_name', 'st.service_name', 'so.title'],
+    statusColumn: 'so.status',
     orderBy: 'so.created_at DESC, so.service_order_id DESC',
   })
 }
@@ -578,6 +591,7 @@ export function listRequirements(req, res, next) {
       INNER JOIN customers c ON c.customer_id = a.customer_id
       INNER JOIN job_profiles jp ON jp.job_profile_id = r.job_profile_id`,
     searchColumns: ['r.requirement_number', 'c.company_name', 'r.job_title', 'jp.profile_name'],
+    statusColumn: 'r.status',
     orderBy: 'r.created_at DESC, r.requirement_id DESC',
   })
 }
@@ -626,6 +640,7 @@ export async function listRequirementIntakes(req, res, next) {
       INNER JOIN users u ON u.user_id = cc.user_id`,
     where: "i.status IN ('PENDING','SUBMITTED','CONVERTED','EXPIRED')",
     searchColumns: ['c.company_name', 'u.full_name', 'u.email', 'i.job_title'],
+    statusColumn: 'i.status',
     orderBy: 'i.created_at DESC, i.intake_id DESC',
   })
 }
@@ -706,5 +721,194 @@ export async function approveServiceOrder(req, res, next) {
     return next(error)
   } finally {
     connection?.release()
+  }
+}
+
+export async function updateWorkspaceRecord(req, res, next) {
+  try {
+    const { module, id } = req.params
+    const recordId = positiveId(id, 'Record ID')
+    const input = req.body ?? {}
+
+    if (module === 'customers') {
+      const companyName = requiredText(input, 'company_name', 'Company name', 200)
+      const customerCode = requiredText(input, 'customer_code', 'Customer code', 30).toUpperCase()
+      const industry = optionalText(input, 'industry', 'Industry', 100)
+      const status = enumValue(input.status ?? 'ACTIVE', 'customer status', ['PROSPECT', 'ACTIVE', 'INACTIVE'])
+      const paymentTermsDays = input.payment_terms_days == null || input.payment_terms_days === ''
+        ? 30
+        : Number(input.payment_terms_days)
+
+      await pool.execute(
+        `UPDATE customers
+         SET company_name = ?, customer_code = ?, industry = ?, status = ?, payment_terms_days = ?
+         WHERE customer_id = ?`,
+        [companyName, customerCode, industry, status, paymentTermsDays, recordId],
+      )
+      return res.json({ message: 'Customer updated successfully.' })
+    }
+
+    if (module === 'users') {
+      const fullName = requiredText(input, 'full_name', 'Full name', 100)
+      const mobile = optionalText(input, 'mobile', 'Mobile', 20)
+      const status = enumValue(input.status ?? 'ACTIVE', 'user status', ['INVITED', 'ACTIVE', 'INACTIVE', 'SUSPENDED'])
+      const role = enumValue(input.role, 'role', ['ADMIN', 'RECRUITER', 'CUSTOMER', 'CANDIDATE'])
+
+      await pool.execute(
+        `UPDATE users
+         SET full_name = ?, mobile = ?, status = ?, role = ?
+         WHERE user_id = ?`,
+        [fullName, mobile, status, role, recordId],
+      )
+      return res.json({ message: 'User updated successfully.' })
+    }
+
+    if (module === 'skills') {
+      const skillName = requiredText(input, 'skill_name', 'Skill name', 100)
+      const skillCategory = optionalText(input, 'skill_category', 'Skill category', 60)
+      await pool.execute(
+        'UPDATE skills SET skill_name = ?, skill_category = ? WHERE skill_id = ?',
+        [skillName, skillCategory, recordId],
+      )
+      return res.json({ message: 'Skill updated successfully.' })
+    }
+
+    if (module === 'service-types') {
+      const serviceCode = requiredText(input, 'service_code', 'Service code', 30).toUpperCase()
+      const serviceName = requiredText(input, 'service_name', 'Service name', 100)
+      const employmentModel = enumValue(input.employment_model, 'employment model', ['DTS_PAYROLL', 'CUSTOMER_PAYROLL'])
+      await pool.execute(
+        'UPDATE service_types SET service_code = ?, service_name = ?, employment_model = ? WHERE service_type_id = ?',
+        [serviceCode, serviceName, employmentModel, recordId],
+      )
+      return res.json({ message: 'Service type updated successfully.' })
+    }
+
+    if (module === 'job-profiles') {
+      const profileCode = requiredText(input, 'profile_code', 'Profile code', 30).toUpperCase()
+      const profileName = requiredText(input, 'profile_name', 'Profile name', 150)
+      const category = optionalText(input, 'category', 'Category', 100)
+      const status = enumValue(input.status ?? 'ACTIVE', 'job profile status', ['DRAFT', 'ACTIVE', 'ARCHIVED'])
+      const experienceMin = numberValue(input.default_experience_min, 'Min experience', { max: 999.9, optional: true })
+      const experienceMax = numberValue(input.default_experience_max, 'Max experience', { max: 999.9, optional: true })
+
+      await pool.execute(
+        `UPDATE job_profiles
+         SET profile_code = ?, profile_name = ?, category = ?, status = ?,
+             default_experience_min = ?, default_experience_max = ?
+         WHERE job_profile_id = ?`,
+        [profileCode, profileName, category, status, experienceMin, experienceMax, recordId],
+      )
+      return res.json({ message: 'Job profile updated successfully.' })
+    }
+
+    if (module === 'agreements') {
+      const title = requiredText(input, 'title', 'Title', 200)
+      const status = enumValue(input.status ?? 'DRAFT', 'agreement status', [
+        'DRAFT', 'PENDING_SIGNATURE', 'ACTIVE', 'EXPIRED', 'TERMINATED',
+      ])
+      const effectiveDate = optionalDate(input.effective_date, 'Effective date')
+      const expiryDate = optionalDate(input.expiry_date, 'Expiry date')
+      const signedDate = optionalDate(input.signed_date, 'Signed date')
+
+      await pool.execute(
+        `UPDATE agreements
+         SET title = ?, status = ?, effective_date = ?, expiry_date = ?, signed_date = ?
+         WHERE agreement_id = ?`,
+        [title, status, effectiveDate, expiryDate, signedDate, recordId],
+      )
+      return res.json({ message: 'Agreement updated successfully.' })
+    }
+
+    if (module === 'rate-cards') {
+      const feeType = enumValue(input.fee_type, 'fee type', ['PERCENTAGE', 'FIXED_AMOUNT', 'SALARY_MONTHS'])
+      const feeBasis = enumValue(input.fee_basis, 'fee basis', ['MONTHLY_SALARY', 'ANNUAL_CTC', 'HOURLY', 'PER_PLACEMENT'])
+      const feeValue = numberValue(input.fee_value, 'Fee value')
+      const billingFrequency = enumValue(input.billing_frequency, 'billing frequency', ['ONE_TIME', 'MONTHLY', 'QUARTERLY'])
+      const effectiveFrom = optionalDate(input.effective_from, 'Effective from')
+      const effectiveTo = optionalDate(input.effective_to, 'Effective to')
+
+      await pool.execute(
+        `UPDATE rate_cards
+         SET fee_type = ?, fee_basis = ?, fee_value = ?, billing_frequency = ?,
+             effective_from = ?, effective_to = ?
+         WHERE rate_card_id = ?`,
+        [feeType, feeBasis, feeValue, billingFrequency, effectiveFrom, effectiveTo, recordId],
+      )
+      return res.json({ message: 'Rate card updated successfully.' })
+    }
+
+    if (module === 'service-orders') {
+      const title = requiredText(input, 'title', 'Title', 200)
+      const status = enumValue(input.status ?? 'DRAFT', 'status', [
+        'DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED',
+      ])
+      const startDate = optionalDate(input.start_date, 'Start date')
+      const endDate = optionalDate(input.end_date, 'End date')
+      const scopeDescription = optionalText(input, 'scope_description', 'Scope', 60000)
+
+      await pool.execute(
+        `UPDATE service_orders
+         SET title = ?, status = ?, start_date = ?, end_date = ?, scope_description = ?
+         WHERE service_order_id = ?`,
+        [title, status, startDate, endDate, scopeDescription, recordId],
+      )
+      return res.json({ message: 'Service order updated successfully.' })
+    }
+
+    if (module === 'requirements') {
+      const jobTitle = requiredText(input, 'job_title', 'Job title', 150)
+      const status = enumValue(input.status ?? 'OPEN', 'status', [
+        'PENDING_APPROVAL', 'APPROVED', 'OPEN', 'ON_HOLD', 'FILLED', 'CANCELLED',
+      ])
+      const headcount = numberValue(input.headcount, 'Headcount', { min: 1, max: 65535 })
+      const workMode = enumValue(input.work_mode, 'work mode', ['ONSITE', 'REMOTE', 'HYBRID'])
+      const salaryMin = numberValue(input.salary_min, 'Minimum salary', { optional: true })
+      const salaryMax = numberValue(input.salary_max, 'Maximum salary', { optional: true })
+
+      await pool.execute(
+        `UPDATE job_requirements
+         SET job_title = ?, status = ?, headcount = ?, work_mode = ?, salary_min = ?, salary_max = ?
+         WHERE requirement_id = ?`,
+        [jobTitle, status, headcount, workMode, salaryMin, salaryMax, recordId],
+      )
+      return res.json({ message: 'Requirement updated successfully.' })
+    }
+
+    if (module === 'customer-contacts') {
+      const designation = optionalText(input, 'designation', 'Designation', 100)
+      const contactType = enumValue(input.contact_type ?? 'HIRING', 'contact type', ['PRIMARY', 'BILLING', 'HIRING', 'ESCALATION', 'OTHER'])
+      const status = enumValue(input.status ?? 'ACTIVE', 'contact status', ['ACTIVE', 'INACTIVE'])
+      const isPrimary = optionalBoolean(input.is_primary, 'Is primary')
+
+      await pool.execute(
+        `UPDATE customer_contacts
+         SET designation = ?, contact_type = ?, status = ?, is_primary = ?
+         WHERE contact_id = ?`,
+        [designation, contactType, status, isPrimary, recordId],
+      )
+      return res.json({ message: 'Customer contact updated successfully.' })
+    }
+
+    if (module === 'customer-addresses') {
+      const addressType = enumValue(input.address_type ?? 'SERVICE', 'address type', ['REGISTERED', 'BILLING', 'SERVICE', 'OTHER'])
+      const addressLine = requiredText(input, 'address_line', 'Address line', 255)
+      const city = requiredText(input, 'city', 'City', 100)
+      const state = requiredText(input, 'state', 'State', 100)
+      const postalCode = optionalText(input, 'postal_code', 'Postal code', 20)
+      const isPrimary = optionalBoolean(input.is_primary, 'Is primary')
+
+      await pool.execute(
+        `UPDATE customer_addresses
+         SET address_type = ?, address_line = ?, city = ?, state = ?, postal_code = ?, is_primary = ?
+         WHERE address_id = ?`,
+        [addressType, addressLine, city, state, postalCode, isPrimary, recordId],
+      )
+      return res.json({ message: 'Customer address updated successfully.' })
+    }
+
+    throw badRequest('Update is not supported for this business module.')
+  } catch (error) {
+    return next(error)
   }
 }

@@ -21,6 +21,7 @@ import {
   listSkills,
   listUsers,
   sendCustomerRequirementIntake,
+  updateWorkspaceRecord,
 } from './workspace.controller.js'
 import { requireAdmin, requireAuth } from '../auth/auth.middleware.js'
 
@@ -49,5 +50,6 @@ router.post('/service-orders/:serviceOrderId/approve', approveServiceOrder)
 router.post('/users/invitations', createInvitation)
 router.post('/customers/:customerId/requirement-intakes', sendCustomerRequirementIntake)
 router.post('/:module', createWorkspaceRecord)
+router.put('/:module/:id', updateWorkspaceRecord)
 
 export default router

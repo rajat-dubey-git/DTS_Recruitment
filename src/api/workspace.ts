@@ -116,7 +116,7 @@ export type InvitationResult = {
   expiresAt: string
 }
 
-export type InvitationRole = 'RECRUITER' | 'CUSTOMER'
+export type InvitationRole = 'RECRUITER' | 'CUSTOMER' | 'CANDIDATE'
 
 export type AgreementCatalog = {
   customers: Array<{ customer_id: number; company_name: string }>
@@ -381,7 +381,7 @@ export const workspaceApi = {
     }
   },
 
-  async list(module: AdminModule, params: { limit: number; offset: number; search: string }) {
+  async list(module: AdminModule, params: { limit: number; offset: number; search: string; status?: string }) {
     try {
       const response = await http.get<WorkspacePage>(`/admin/${module}`, { params })
       return response.data
@@ -411,6 +411,15 @@ export const workspaceApi = {
       return response.data
     } catch (error) {
       throw new Error(messageFrom(error, `Unable to create this ${module.replace('-', ' ')} record.`))
+    }
+  },
+
+  async updateRecord(module: AdminModule, id: number, values: Record<string, unknown>) {
+    try {
+      const response = await http.put<{ message: string }>(`/admin/${module}/${id}`, values)
+      return response.data
+    } catch (error) {
+      throw new Error(messageFrom(error, `Unable to update this ${module.replace('-', ' ')} record.`))
     }
   },
 
