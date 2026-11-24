@@ -98,6 +98,67 @@ CREATE TABLE notifications (
   CONSTRAINT fk_notifications_user FOREIGN KEY (user_id) REFERENCES users(user_id)
 ) ENGINE=InnoDB;
 
+CREATE TABLE customer_requirement_intakes (
+  intake_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  customer_id INT UNSIGNED NOT NULL,
+  contact_id INT UNSIGNED NOT NULL,
+  token_hash CHAR(64) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  status ENUM('PENDING','SUBMITTED','CONVERTED','CANCELLED','EXPIRED') NOT NULL DEFAULT 'PENDING',
+  job_title VARCHAR(150) NULL,
+  job_description TEXT NULL,
+  headcount SMALLINT UNSIGNED NULL,
+  work_mode ENUM('ONSITE','REMOTE','HYBRID') NULL,
+  work_location VARCHAR(150) NULL,
+  experience_min_years DECIMAL(4,1) NULL,
+  experience_max_years DECIMAL(4,1) NULL,
+  salary_min DECIMAL(12,2) NULL,
+  salary_max DECIMAL(12,2) NULL,
+  employment_schedule ENUM('FULL_TIME','PART_TIME') NULL,
+  hours_per_week DECIMAL(5,2) NULL,
+  target_join_date DATE NULL,
+  submitted_at DATETIME NULL,
+  created_by INT UNSIGNED NULL,
+  reviewed_by INT UNSIGNED NULL,
+  reviewed_at DATETIME NULL,
+  requirement_id INT UNSIGNED NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (intake_id),
+  UNIQUE KEY uq_customer_requirement_intakes_token (token_hash),
+  UNIQUE KEY uq_customer_requirement_intakes_requirement (requirement_id),
+  KEY ix_customer_requirement_intakes_customer_status (customer_id, status, created_at),
+  KEY ix_customer_requirement_intakes_expiry (status, expires_at),
+  CONSTRAINT fk_customer_requirement_intakes_customer FOREIGN KEY (customer_id) REFERENCES customers(customer_id),
+  CONSTRAINT fk_customer_requirement_intakes_contact FOREIGN KEY (contact_id) REFERENCES customer_contacts(contact_id),
+  CONSTRAINT fk_customer_requirement_intakes_creator FOREIGN KEY (created_by) REFERENCES users(user_id),
+  CONSTRAINT fk_customer_requirement_intakes_reviewer FOREIGN KEY (reviewed_by) REFERENCES users(user_id),
+  CONSTRAINT fk_customer_requirement_intakes_requirement FOREIGN KEY (requirement_id) REFERENCES job_requirements(requirement_id),
+  CONSTRAINT ck_customer_requirement_intakes_expiry CHECK (expires_at > created_at),
+  CONSTRAINT ck_customer_requirement_intakes_headcount CHECK (headcount IS NULL OR headcount > 0),
+  CONSTRAINT ck_customer_requirement_intakes_experience CHECK (
+    experience_min_years IS NULL OR experience_max_years IS NULL OR experience_max_years >= experience_min_years
+  ),
+  CONSTRAINT ck_customer_requirement_intakes_salary CHECK (
+    salary_min IS NULL OR salary_max IS NULL OR salary_max >= salary_min
+  ),
+  CONSTRAINT ck_customer_requirement_intakes_hours CHECK (
+    hours_per_week IS NULL OR (hours_per_week > 0 AND hours_per_week <= 168)
+  ),
+  CONSTRAINT ck_customer_requirement_intakes_part_time CHECK (
+    employment_schedule IS NULL OR employment_schedule = 'FULL_TIME' OR hours_per_week IS NOT NULL
+  ),
+  CONSTRAINT ck_customer_requirement_intakes_submitted CHECK (
+    status NOT IN ('SUBMITTED','CONVERTED') OR (
+      job_title IS NOT NULL AND job_description IS NOT NULL AND headcount IS NOT NULL
+      AND work_mode IS NOT NULL AND employment_schedule IS NOT NULL AND submitted_at IS NOT NULL
+    )
+  ),
+  CONSTRAINT ck_customer_requirement_intakes_converted CHECK (
+    (status = 'CONVERTED') = (requirement_id IS NOT NULL)
+  )
+) ENGINE=InnoDB;
+
 /* Role consistency guards. Validate existing data before creating these triggers. */
 DELIMITER $$
 
@@ -128,8 +189,8 @@ END$$
 CREATE TRIGGER trg_requirement_assignments_bu_role
 BEFORE UPDATE ON requirement_assignments FOR EACH ROW
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM users WHERE user_id = NEW.recruiter_id AND role = 'RECRUITER') THEN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'requirement_assignments.recruiter_id must reference a RECRUITER';
+  IF NOT EXISTS (SELECT 1 FROM users WHERE user_id = NEW.recruiter_id AND role = 'RECRUITER' AND status = 'ACTIVE') THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'requirement_assignments.recruiter_id must reference an ACTIVE RECRUITER';
   END IF;
 END$$
 

@@ -42,6 +42,14 @@ export const authApi = {
     }
   },
 
+  async acceptInvitation(token: string, password: string) {
+    try {
+      await http.post('/auth/invitations/accept', { token, password })
+    } catch (error) {
+      throw new Error(errorMessage(error, 'Unable to set your password. Request a new invitation.'))
+    }
+  },
+
   async logout() {
     try {
       await http.post('/auth/logout')

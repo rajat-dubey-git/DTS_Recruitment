@@ -2,3 +2,10 @@ node_modules/
 dist/
 backend/.env
 backend/node_modules
+changes.md
+now_01.md
+now.md
+INSTRUCTIONS.md
+database command and value.txt
+database_phase2_agreements.sql
+database_additive_migration.sql

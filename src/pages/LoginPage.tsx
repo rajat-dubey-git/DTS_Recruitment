@@ -8,7 +8,7 @@ import { useAuth } from '../context/AuthContext'
 
 const schema = z.object({
   email: z.string().email('Enter a valid email address'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+  password: z.string().min(1, 'Enter your password'),
 })
 
 type FormValues = z.infer<typeof schema>
@@ -78,7 +78,7 @@ export default function LoginPage() {
 
             <div className="password-label">
               <label htmlFor="login-password">Password</label>
-              <a href="mailto:support@dts.com?subject=Password%20assistance">Forgot password?</a>
+              <span>Need help? Contact your administrator.</span>
             </div>
             <div className="password-wrap">
               <input

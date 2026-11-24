@@ -4,6 +4,10 @@ import cors from 'cors'
 import helmet from 'helmet'
 import authRoutes from './auth/auth.routes.js'
 import adminRoutes from './admin/admin.routes.js'
+import invitationRoutes from './auth/invitation.routes.js'
+import requirementIntakeRoutes from './public/requirement-intake.routes.js'
+import dashboardRoutes from './dashboard/dashboard.routes.js'
+import agreementRoutes from './agreements/agreement.routes.js'
 
 const app = express()
 const allowedOrigins = (process.env.CORS_ORIGIN || '')
@@ -26,13 +30,18 @@ app.use(cookieParser())
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
 app.use('/api/auth', authRoutes)
+app.use('/api/dashboard', dashboardRoutes)
+app.use('/api/agreements', agreementRoutes)
 app.use('/api/admin', adminRoutes)
+app.use('/api/auth/invitations', invitationRoutes)
+app.use('/api/public', requirementIntakeRoutes)
 
 app.use((_req, res) => {
   res.status(404).json({ message: 'Route not found.' })
 })
 
-app.use((error, _req, res, _next) => {
+app.use((error, _req, res, next) => {
+  if (res.headersSent) return next(error)
   const databaseErrors = {
     ER_DUP_ENTRY: { status: 409, message: 'A record with the same unique value already exists.' },
     ER_NO_REFERENCED_ROW_2: { status: 409, message: 'A referenced record does not exist.' },
@@ -45,12 +54,17 @@ app.use((error, _req, res, _next) => {
     ER_CHECK_CONSTRAINT_VIOLATED: { status: 400, message: 'A database validation rule was not satisfied.' },
   }
   const databaseError = databaseErrors[error.code]
-  const status = error.statusCode ?? databaseError?.status ?? 500
+  const isMulterError = error.name === 'MulterError'
+  const status = error.statusCode
+    ?? (isMulterError ? (error.code === 'LIMIT_FILE_SIZE' ? 413 : 400) : databaseError?.status)
+    ?? 500
 
   if (status >= 500) console.error(error)
   res.status(status).json({
     message: error.statusCode
       ? error.message
+      : isMulterError
+        ? (error.code === 'LIMIT_FILE_SIZE' ? 'PDF must not exceed 50 MB.' : 'Unable to process the uploaded file.')
       : databaseError?.message ?? 'Internal server error.',
   })
 })

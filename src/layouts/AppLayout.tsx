@@ -3,12 +3,8 @@ import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 import {
-  Bell,
-  ChevronDown,
   LogOut,
   Menu,
-  Search,
-  Settings,
 } from 'lucide-react'
 
 import { useAuth } from '../context/AuthContext'
@@ -75,20 +71,10 @@ export default function AppLayout() {
         </nav>
 
         <div className="sidebar-bottom">
-
-          <button className="nav-item" type="button">
-            <Settings size={18} />
-            <span>Settings</span>
-          </button>
-
           <div className="help-card">
             <strong>Need assistance?</strong>
-            <p>Contact the DTS support team.</p>
-            <a href="mailto:support@dts.com">
-              Get support ↗
-            </a>
+            <p>Contact your DTS system administrator.</p>
           </div>
-
         </div>
       </aside>
 
@@ -112,17 +98,6 @@ export default function AppLayout() {
           </div>
 
           <div className="top-actions">
-
-            <div className="search-box">
-              <Search size={16} />
-              <input placeholder="Search anything..." />
-            </div>
-
-            <button className="icon-button" type="button">
-              <Bell size={18} />
-              <i />
-            </button>
-
             <div className="user-menu">
 
               <div className="avatar">
@@ -137,14 +112,12 @@ export default function AppLayout() {
                 <strong>{user.fullName}</strong>
                 <small>{user.role}</small>
               </div>
-
-              <ChevronDown size={15} />
-
             </div>
 
             <button
               className="icon-button"
               title="Sign out"
+              aria-label="Sign out"
               type="button"
               onClick={async () => {
                 setLogoutError('')

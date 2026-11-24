@@ -1,3 +1,4 @@
+
 import 'dotenv/config'
 import bcrypt from 'bcryptjs'
 import { pool } from '../src/config/db.js'
@@ -9,17 +10,25 @@ async function createAdmin() {
   const mobile = process.env.ADMIN_MOBILE?.trim() || null
   const resetExistingPassword = process.argv.includes('--reset-password')
 
-  if (email !== 'admin@dts.com') {
-    throw new Error('ADMIN_EMAIL must be admin@dts.com for this local seed.')
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error('Set a valid ADMIN_EMAIL in backend/.env.')
   }
-  if (!password || Buffer.byteLength(password, 'utf8') < 6) {
-    throw new Error('ADMIN_INITIAL_PASSWORD must contain at least 6 characters.')
+
+  if (process.env.DB_PASSWORD === undefined) {
+    throw new Error('Set DB_PASSWORD in backend/.env (use an empty value only if the MySQL account has no password).')
   }
+
+  if (!password || Buffer.byteLength(password, 'utf8') < 12) {
+    throw new Error('ADMIN_INITIAL_PASSWORD must contain at least 12 characters.')
+  }
+
   if (Buffer.byteLength(password, 'utf8') > 72) {
-    throw new Error('ADMIN_INITIAL_PASSWORD cannot exceed 72 UTF-8 bytes.')
+    throw new Error('Password cannot exceed 72 UTF-8 bytes for bcrypt.')
   }
-  if (process.env.NODE_ENV === 'production' && password.length < 12) {
-    throw new Error('Production admin passwords must contain at least 12 characters.')
+
+  if (!process.env.JWT_ACCESS_SECRET ||
+      Buffer.byteLength(process.env.JWT_ACCESS_SECRET, 'utf8') < 32) {
+    throw new Error('JWT_ACCESS_SECRET must contain at least 32 bytes.')
   }
 
   const [rows] = await pool.execute(
@@ -31,45 +40,57 @@ async function createAdmin() {
   )
 
   const existingUser = rows[0]
+  const passwordHash = await bcrypt.hash(password, 12)
+
   if (existingUser) {
-    if (existingUser.role !== 'ADMIN' || existingUser.status !== 'ACTIVE') {
-      throw new Error('The configured admin account exists but is not an active ADMIN.')
+    if (existingUser.role !== 'ADMIN') {
+      throw new Error('This email already belongs to a non-ADMIN user.')
     }
-    if (existingUser.password_hash && !resetExistingPassword) {
-      console.log('The configured admin already has a password hash; no changes made.')
+
+    if (!['ACTIVE', 'INVITED'].includes(existingUser.status)) {
+      throw new Error(
+        `Admin account status is ${existingUser.status}. Resolve the account status before running this setup command.`,
+      )
+    }
+
+    if (existingUser.status === 'ACTIVE' && existingUser.password_hash && !resetExistingPassword) {
+      console.log('Admin already has a password. No changes made.')
+      console.log('Use --reset-password only if you intentionally want to replace it.')
       return
     }
 
-    const passwordHash = await bcrypt.hash(password, 12)
     await pool.execute(
-      'UPDATE users SET password_hash = ? WHERE user_id = ?',
+      `UPDATE users
+       SET password_hash = ?, status = 'ACTIVE'
+       WHERE user_id = ? AND role = 'ADMIN' AND status IN ('ACTIVE', 'INVITED')`,
       [passwordHash, existingUser.user_id],
     )
+
     console.log(
       existingUser.password_hash
-        ? 'Reset the configured admin password hash.'
-        : 'Added a bcrypt password hash to the existing admin account.',
+        ? 'Existing Admin password has been reset.'
+        : 'Password successfully configured for the existing Admin.',
     )
     return
   }
 
-  const passwordHash = await bcrypt.hash(password, 12)
   await pool.execute(
-    `INSERT INTO users (full_name, email, mobile, password_hash, role, status)
+    `INSERT INTO users
+      (full_name, email, mobile, password_hash, role, status)
      VALUES (?, ?, ?, ?, 'ADMIN', 'ACTIVE')`,
     [fullName, email, mobile, passwordHash],
   )
-  console.log('Created the active admin account with a bcrypt password hash.')
 
-  if (process.env.NODE_ENV !== 'production' && password.length < 12) {
-    console.warn('Use a stronger password before deploying this application.')
-  }
+  console.log(`Admin account created successfully: ${email}`)
 }
 
 try {
   await createAdmin()
 } catch (error) {
-  console.error('Admin seed failed:', error instanceof Error ? error.message : 'Unknown error')
+  console.error(
+    'Admin setup failed:',
+    error instanceof Error ? error.message : error,
+  )
   process.exitCode = 1
 } finally {
   await pool.end()

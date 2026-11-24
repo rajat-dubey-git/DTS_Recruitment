@@ -1,32 +1,174 @@
-# DTS login API
 
-The API connects the frontend to the existing MySQL schema. Login, session restoration, and logout use an HttpOnly cookie. Passwords are checked with bcrypt; the API never returns `password_hash`.
+# DTS Recruitment & Staffing Platform
 
-## Local setup
+A recruitment and staffing management platform for managing customers, users, job profiles, hiring requirements, candidate pipelines, interviews, placements and commercial operations.
 
-1. Copy `.env.example` to `.env` and set the MySQL connection, a random `JWT_ACCESS_SECRET` (at least 32 random bytes), and `ADMIN_INITIAL_PASSWORD`.
-2. Confirm the configured database already contains the project schema. Do not run a SQL file containing `DROP DATABASE` against a database with data.
-3. From this directory, run `npm install`, then `npm run create-admin`. The seed only creates the configured active admin if it is missing, or adds a bcrypt hash if its password hash is empty. It does not replace an existing password hash unless you explicitly pass `npm run create-admin -- --reset-password`.
-4. Run `npm run dev`. The Vite development server proxies `/api` to `http://127.0.0.1:3000`.
+## Technology Stack
 
-The local admin email is `admin@dts.com`; its password is the value of `ADMIN_INITIAL_PASSWORD` in `.env`. Use a strong password and never reuse a demo password outside local development.
+### Frontend
+- React 18
+- TypeScript
+- Vite
+- React Router
+- Tailwind CSS
+- Axios
+- React Hook Form
+- Zod
 
-To rotate the local admin password, change `ADMIN_INITIAL_PASSWORD` in `.env` and run `npm run create-admin -- --reset-password`.
+### Backend
+- Node.js
+- Express
+- MySQL2
+- JWT
+- bcrypt
+- HttpOnly cookie-based authentication
 
-The login endpoints are `POST /api/auth/login`, `GET /api/auth/me`, and `POST /api/auth/logout`.
+### Database
+- MySQL 8.0.16+
+- InnoDB
+- UTF-8 (`utf8mb4`)
 
-## Database records
+## Project Structure
 
-After login, an `ADMIN` can browse all base tables at `/app/admin`. The database API uses the live schema to provide paginated reads and create, update, and delete operations:
+```text
+DTS-Recruitment/
+├── backend/
+├── src/
+├── database command and value.txt
+├── database_additive_migration.sql
+├── README.md
+└── INSTRUCTIONS.md
+```
 
-- `GET /api/admin/tables` returns table metadata and row counts.
-- `GET /api/admin/tables/:table/records` lists records; `limit` is capped at 100 and `offset` is zero-based.
-- `POST /api/admin/tables/:table/records` accepts `{ "values": { ... } }`.
-- `PUT /api/admin/tables/:table/records` accepts `{ "keys": { ...primary-key fields }, "values": { ...changed fields } }`.
-- `DELETE /api/admin/tables/:table/records` accepts `{ "keys": { ...primary-key fields } }`.
+## Prerequisites
 
-Table names and columns are resolved from the configured database schema, and all values are parameterized. Password and refresh-token hashes are excluded from reads and writes. Authentication, audit, and status-history tables remain read-only through this generic interface. A new user must be invited before being marked active. Foreign-key and unique-constraint errors are returned as actionable client errors.
+- Node.js 20+
+- npm
+- MySQL 8.0.16+
+- Git
 
-The configured database already contains sample records in all 36 current application tables; do not rerun its destructive database-reset statement or insert a second seed set. A separate additive migration file in the workspace has not been applied; review and back up the database before deciding whether to apply it.
+## Local Setup
 
-Existing user rows with `password_hash IS NULL` cannot sign in even when their status is `ACTIVE`. The local admin seed adds a hash only for the configured admin; other accounts need an explicit password invitation/reset flow.
+### 1. Clone the repository
+
+```bash
+git clone <your-repository-url>
+cd DTS-Recruitment
+```
+
+### 2. Configure MySQL
+
+Create and configure the `dts_recruitment` database using the approved SQL setup.
+
+Do not rerun the complete database seed script against an existing database.
+
+### 3. Configure the backend
+
+```bash
+cd backend
+npm install
+```
+
+Copy `.env.example` to `.env` and configure the database connection, JWT secret and administrator bootstrap credentials.
+
+### 4. Initialize the administrator
+
+```bash
+npm run create-admin
+```
+
+### 5. Start the backend
+
+```bash
+npm run dev
+```
+
+The API runs at:
+
+```text
+http://127.0.0.1:3000
+```
+
+### 6. Start the frontend
+
+Open a second terminal:
+
+```bash
+npm install
+npm run dev
+```
+
+Open the Vite URL displayed in the terminal.
+
+## Authentication
+
+The application uses backend-managed authentication.
+
+- Passwords are hashed using bcrypt.
+- JWT access tokens are stored in HttpOnly cookies.
+- The backend validates user status and role.
+- Passwords and password hashes must never be exposed to the frontend.
+
+Recruiter and customer-contact invitations use one-time setup links. Configure SMTP to deliver links; development can display links for manual sharing if SMTP is absent. Production refuses email-link creation without SMTP. Password reset and OTP authentication are not implemented.
+
+## API
+
+Current authentication endpoints:
+
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
+
+Role-scoped dashboard analytics:
+
+- `GET /api/dashboard/analytics` (requires an active authenticated user; data scope is derived from the user's ADMIN, CUSTOMER, RECRUITER, or CANDIDATE role)
+
+Admin endpoints (all require an active ADMIN session):
+
+- `GET /api/admin/dashboard`
+- `GET /api/admin/customers`
+- `GET /api/admin/customer-addresses`
+- `GET /api/admin/customer-contacts`
+- `GET /api/admin/recruiters`
+- `GET /api/admin/users`
+- `GET /api/admin/skills`
+- `GET /api/admin/service-types`
+- `GET /api/admin/job-profiles`
+- `GET /api/admin/agreements`
+- `GET /api/admin/rate-cards`
+- `GET /api/admin/service-orders`
+- `GET /api/admin/requirements`
+- `GET /api/admin/requirements/options`
+- `POST /api/admin/requirements`
+- `GET /api/admin/requirement-intakes`
+- `POST /api/admin/customers/:customerId/requirement-intakes`
+- `POST /api/admin/requirement-intakes/:intakeId/convert`
+- `POST /api/admin/service-orders/:serviceOrderId/approve`
+- `POST /api/admin/users/invitations`
+- `POST /api/auth/invitations/accept` (public, rate-limited, one-time token)
+- `GET /api/public/requirement-intakes/:token` and `POST` (public, rate-limited, expiring one-time form)
+
+Allowlisted create endpoints are available for customers, skills, service types, job profiles, agreements, rate cards and service orders. Admins can create requirements only against an approved/in-progress service order and active job profile; they start at `PENDING_APPROVAL`. List endpoints accept `limit`, `offset` and `search`. Responses contain only fields needed by these modules. Arbitrary database-table read/write endpoints were removed.
+
+## Development Rules
+
+1. MySQL schema is the source of truth.
+2. Do not invent database fields or enum values in frontend code.
+3. Validate data in the backend before database operations.
+4. Use parameterized SQL queries.
+5. Use transactions for multi-table business operations.
+6. Never store plaintext passwords or OTPs.
+7. Keep secrets in environment variables.
+8. Do not commit `.env`, credentials, customer information or candidate documents.
+9. Use database migrations for schema changes.
+10. Protect all APIs with authentication and role-based authorization.
+
+## Security
+
+This project is under active development. It is not yet production-ready.
+
+Before deployment, verify SMTP deliverability, complete password-reset workflows, add automated access-control tests and audit logging, and review production infrastructure. OTP is not implemented and must not be presented as a login option until its delivery and verification workflows are built and tested.
+
+## Documentation
+
+See [INSTRUCTIONS.md](INSTRUCTIONS.md) for setup, database safety, environment configuration, testing and development guidelines.
