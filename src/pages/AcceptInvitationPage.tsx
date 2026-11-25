@@ -3,10 +3,15 @@ import type { FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { z } from 'zod'
 import { authApi } from '../api/auth'
+import { Eye, EyeOff } from 'lucide-react'
 
 const passwordSchema = z.object({
   password: z.string()
-    .min(12, 'Use at least 12 characters.')
+    .min(8, 'Use at least 8 characters.')
+    .regex(/[A-Z]/, 'Add at least one uppercase letter.')
+    .regex(/[a-z]/, 'Add at least one lowercase letter.')
+    .regex(/[0-9]/, 'Add at least one number.')
+    .regex(/[^A-Za-z0-9]/, 'Add at least one special character.')
     .refine((value) => new TextEncoder().encode(value).length <= 72, 'Password must be 72 UTF-8 bytes or fewer.'),
   confirmPassword: z.string(),
 }).refine((values) => values.password === values.confirmPassword, {
@@ -22,6 +27,7 @@ export default function AcceptInvitationPage() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -71,10 +77,15 @@ export default function AcceptInvitationPage() {
             </>
           ) : (
             <>
-              <p className="form-intro">Choose a password with at least 12 characters.</p>
+              <p className="form-intro">Use 8+ characters with uppercase, lowercase, number and special character.</p>
               <form onSubmit={(event) => void submit(event)} noValidate>
                 <label htmlFor="new-password">New password</label>
-                <input id="new-password" type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+                <div className="password-wrap">
+                  <input id="new-password" type={showPassword ? 'text' : 'password'} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+                  <button type="button" onClick={() => setShowPassword((visible) => !visible)} aria-label={showPassword ? 'Hide password' : 'Show password'}>
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
                 <label htmlFor="confirm-password">Confirm password</label>
                 <input id="confirm-password" type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required />
                 {error && <div className="form-error" role="alert">{error}</div>}

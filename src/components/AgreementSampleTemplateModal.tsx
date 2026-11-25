@@ -6,9 +6,9 @@ export default function AgreementSampleTemplateModal({ onClose }: { onClose: () 
   }
 
   return (
-    <div className="customer-modal-overlay" style={{ zIndex: 1000 }}>
+    <div className="customer-modal-overlay agreement-template-overlay" style={{ zIndex: 1000 }}>
       <div
-        className="customer-modal"
+        className="customer-modal agreement-template-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="template-title"
@@ -173,7 +173,7 @@ export default function AgreementSampleTemplateModal({ onClose }: { onClose: () 
           </section>
         </div>
 
-        <div className="customer-modal-actions" style={{ borderTop: '1px solid #e5e7eb', paddingTop: '1rem' }}>
+        <div className="customer-modal-actions agreement-template-actions" style={{ borderTop: '1px solid #e5e7eb', paddingTop: '1rem' }}>
           <button type="button" className="btn btn-outline" onClick={onClose}>Close preview</button>
         </div>
       </div>

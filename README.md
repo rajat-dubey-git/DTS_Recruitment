@@ -11,9 +11,12 @@ Recruitment operations app with a React/TypeScript frontend, Node.js/Express API
 - Admin user directory and direct creation of requirements on approved service orders
 - Customer requirement form links, submissions, admin review, and conversion to requirements linked to an active job profile and approved service order
 - Admin approval of service orders against active agreements
-- No generic database-table browser and no candidate records in the admin UI
+- Customer agreement requests, draft and signed PDF workflows, and customer/admin download archives
+- Candidate self-service for profile, skills, education, work history, private resumes, open requirements, applications and application history
+- Recruiter-assigned requirement details, candidate matching, consent-confirmed submissions, application stage updates and interview scheduling
+- Customer candidate decisions (shortlist, reject or hold) and an admin candidate/document-review workspace
 
-Customer requirement requests are staged and do not become active recruiting requirements until an administrator maps them to the customer's approved service order and an active job profile. New requirements start at `PENDING_APPROVAL`. Customer/recruiter portals, OTP login, candidate workflows, and full edit/archive workflows are not implemented. Do not use this build as a production system until deployment controls and end-to-end testing are complete.
+Customer requirement requests are staged and do not become active recruiting requirements until an administrator maps them to the customer's approved service order and an active job profile. New requirements start at `PENDING_APPROVAL`. Candidate resume files remain private and are only shared after candidate consent plus admin verification and an external malware scan attestation. OTP login and some full edit/archive workflows are not implemented. Do not use this build as a production system until deployment controls and end-to-end testing are complete.
 
 ## Prerequisites
 
@@ -24,7 +27,7 @@ Customer requirement requests are staged and do not become active recruiting req
 ## Local setup
 
 1. The schema and sample data are in `database command and value.txt`. It creates the database and contains multiple seed blocks; **do not run it again against an existing database**. Back up the database before any schema change.
-2. Review and apply `database_additive_migration.sql` once to the existing `dts_recruitment` database. It creates the invitation, security-support, and customer requirement-intake tables. See [INSTRUCTIONS.md](INSTRUCTIONS.md).
+2. Review and apply `database_additive_migration.sql` once to the existing `dts_recruitment` database. It creates the invitation, security-support, and customer requirement-intake tables. Apply `database_add_customer_candidate_decisions.sql` after confirming the base candidate-sharing tables exist. Back up the database before applying either migration. See [INSTRUCTIONS.md](INSTRUCTIONS.md).
 3. In `backend`, copy `.env.example` to `.env`. Set the actual MySQL account password in `DB_PASSWORD`, a random JWT secret of at least 32 bytes, a private initial admin password (at least 12 characters; bcrypt accepts at most 72 UTF-8 bytes), and SMTP settings. Never commit `.env`.
 4. Create or initialize the admin password:
 
@@ -48,6 +51,14 @@ Customer requirement requests are staged and do not become active recruiting req
    ```
 
 7. Sign in with the `ADMIN_EMAIL` and `ADMIN_INITIAL_PASSWORD` configured in the local backend environment. There are no demo credentials.
+
+## Private document storage
+
+Set `PRIVATE_FILE_STORAGE_PATH` in `backend/.env` to an absolute directory. Agreement PDFs and resume documents are stored on the server there; authorized agreement downloads are archived under `Admin_Downloads` or `Customer_Downloads`. For security, an in-repository path is accepted only when its root folder is named `DTS_Private_Storage`, which is ignored by Git.
+
+The browser download is saved using the user's normal browser download settings; a web page cannot choose an arbitrary directory on the user's computer. The server-side archive is the copy placed in the configured private-storage folders.
+
+Candidate resumes uploaded through the portal remain pending until an administrator reviews the document after using an approved external malware scanner. This application does not scan files itself. Only verified, clean documents can be previewed/shared through the authorized recruiter and customer workflows.
 
 ## Database and account passwords
 

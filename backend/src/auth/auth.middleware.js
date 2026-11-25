@@ -1,3 +1,4 @@
+// backend/src/auth/auth.middleware.js
 import jwt from 'jsonwebtoken'
 import { pool } from '../config/db.js'
 
@@ -14,7 +15,7 @@ export async function requireAuth(req, res, next) {
     payload = jwt.verify(token, process.env.JWT_ACCESS_SECRET, {
       issuer: 'dts-recruitment-api',
       audience: 'dts-recruitment-web',
-      algorithms: ['HS256'],
+      algorithms: ['HS256']
     })
   } catch {
     return res.status(401).json({ message: 'Session expired. Sign in again.' })
@@ -27,10 +28,9 @@ export async function requireAuth(req, res, next) {
   try {
     const [rows] = await pool.execute(
       `SELECT user_id, full_name, email, role, status
-       FROM users
-       WHERE user_id = ?
-       LIMIT 1`,
-      [Number(payload.sub)],
+      FROM users
+      WHERE user_id = ?`,
+      [Number(payload.sub)]
     )
 
     const user = rows[0]
@@ -40,6 +40,7 @@ export async function requireAuth(req, res, next) {
     }
 
     req.authUser = user
+
     return next()
   } catch (error) {
     return next(error)
@@ -51,4 +52,16 @@ export function requireAdmin(req, res, next) {
     return res.status(403).json({ message: 'Administrator access is required.' })
   }
   return next()
+}
+
+export function requireCandidate(req, res, next) {
+  if (!req.authUser) {
+    return res.status(401).json({ message: 'Authentication required.' })
+  }
+
+  if (req.authUser.role !== 'CANDIDATE') {
+    return res.status(403).json({ message: 'Candidate access required.' })
+  }
+
+  next()
 }

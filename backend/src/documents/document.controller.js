@@ -1,134 +1,119 @@
-import { pool } from '../config/db.js'
 import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
+import { pool } from '../config/db.js'
 import { resolvePrivateStoragePath } from '../agreements/document-storage.js'
+
+function httpError(statusCode, message) {
+  return Object.assign(new Error(message), { statusCode })
+}
 
 export async function streamResumeDocument(req, res, next) {
   try {
     const shareId = Number(req.params.shareId)
-    if (!shareId) return res.status(400).json({ message: 'Invalid share ID.' })
+    if (!Number.isSafeInteger(shareId) || shareId < 1) {
+      throw httpError(400, 'Invalid resume share ID.')
+    }
 
     const [rows] = await pool.execute(
-      `SELECT 
-        rs.share_id,
-        rs.customer_id,
-        rs.access_expires_at,
-        rs.is_active,
-        c.candidate_id,
-        c.full_name,
-        c.resume_path
+      `SELECT rs.share_id, rs.application_id, rs.shared_with_contact_id,
+              rs.document_id, rs.access_expires_at, rs.status,
+              a.candidate_id, CONCAT_WS(' ', c.first_name, c.last_name) AS candidate_name,
+              cd.file_path, cd.file_name,
+              cd.verification_status, cd.malware_scan_status
        FROM resume_shares rs
-       JOIN candidates c ON c.candidate_id = rs.candidate_id
+       INNER JOIN applications a ON a.application_id = rs.application_id
+       INNER JOIN candidates c ON c.candidate_id = a.candidate_id
+       INNER JOIN candidate_documents cd
+         ON cd.document_id = rs.document_id AND cd.candidate_id = a.candidate_id
        WHERE rs.share_id = ?`,
       [shareId],
     )
-
-    if (rows.length === 0) {
-      return res.status(404).json({ message: 'Resume share record not found.' })
-    }
-
     const share = rows[0]
+    if (!share) throw httpError(404, 'Resume share not found.')
 
-    // Verify permission: Admin or customer contact belonging to this customer
-    if (req.authUser.role !== 'ADMIN' && req.authUser.role !== 'RECRUITER') {
+    if (req.authUser.role === 'CUSTOMER') {
       const [contacts] = await pool.execute(
-        `SELECT customer_id FROM customer_contacts WHERE user_id = ? AND customer_id = ?`,
-        [req.authUser.user_id, share.customer_id],
+        `SELECT contact_id
+         FROM customer_contacts
+         WHERE contact_id = ? AND user_id = ? AND status = 'ACTIVE'
+         LIMIT 1`,
+        [share.shared_with_contact_id, req.authUser.user_id],
       )
-      if (contacts.length === 0) {
-        return res.status(403).json({ message: 'Access denied.' })
+      if (!contacts[0]) throw httpError(403, 'You do not have permission to view this resume.')
+    } else if (req.authUser.role === 'RECRUITER') {
+      const [applications] = await pool.execute(
+        `SELECT a.application_id
+         FROM applications a
+         WHERE a.application_id = ?
+           AND (a.recruiter_id = ? OR EXISTS (
+             SELECT 1
+             FROM requirement_assignments ra
+             WHERE ra.requirement_id = a.requirement_id
+               AND ra.recruiter_id = ?
+               AND ra.unassigned_at IS NULL
+           ))
+         LIMIT 1`,
+        [share.application_id, req.authUser.user_id, req.authUser.user_id],
+      )
+      if (!applications[0]) throw httpError(403, 'This resume is not available to your recruiter account.')
+    } else if (req.authUser.role !== 'ADMIN') {
+      throw httpError(403, 'You do not have permission to view this resume.')
+    }
+    if (share.verification_status !== 'VERIFIED' || share.malware_scan_status !== 'CLEAN') {
+      throw httpError(410, 'This resume is no longer available for sharing.')
+    }
+
+    const expiresAt = share.access_expires_at ? new Date(share.access_expires_at) : null
+    if (
+      share.status === 'EXPIRED' ||
+      share.status === 'REVOKED' ||
+      !expiresAt ||
+      Number.isNaN(expiresAt.getTime()) ||
+      expiresAt.getTime() <= Date.now()
+    ) {
+      if (share.status === 'SHARED' || share.status === 'VIEWED') {
+        await pool.execute(
+          `UPDATE resume_shares SET status = 'EXPIRED'
+           WHERE share_id = ? AND status IN ('SHARED', 'VIEWED')`,
+          [shareId],
+        )
+        await pool.execute(
+          `INSERT INTO resume_share_events (share_id, event_code, actor_user_id)
+           VALUES (?, 'EXPIRED', ?)`,
+          [shareId, req.authUser.user_id],
+        )
       }
+      throw httpError(410, 'This resume share has expired. Ask the recruiter to create a new share.')
     }
 
-    // Check expiry
-    const now = new Date()
-    const expiresAt = new Date(share.access_expires_at)
-    if (now > expiresAt || !share.is_active) {
-      return res.status(410).json({ 
-        message: 'This resume access link has expired after 24 hours. Please contact your DTS Account Manager.',
-        expired: true 
-      })
+    const fullPath = resolvePrivateStoragePath(share.file_path)
+    let fileStats
+    try {
+      fileStats = await stat(fullPath)
+    } catch (error) {
+      if (error.code === 'ENOENT') throw httpError(404, 'The shared resume file is unavailable.')
+      throw error
     }
 
-    // Log audit view event
     await pool.execute(
-      `INSERT INTO resume_share_events
-        (share_id, event_type, actor_user_id, ip_address, user_agent, details)
-       VALUES (?, 'DOCUMENT_VIEWED', ?, ?, ?, 'Resume document previewed/streamed')`,
-      [shareId, req.authUser.user_id, req.ip || '127.0.0.1', req.headers['user-agent'] || ''],
+      `UPDATE resume_shares
+       SET status = 'VIEWED', viewed_at = COALESCE(viewed_at, CURRENT_TIMESTAMP)
+       WHERE share_id = ? AND status = 'SHARED'`,
+      [shareId],
+    )
+    await pool.execute(
+      `INSERT INTO resume_share_events (share_id, event_code, actor_user_id)
+       VALUES (?, 'VIEWED', ?)`,
+      [shareId, req.authUser.user_id],
     )
 
-    // Check if resume_path exists on private filesystem
-    if (!share.resume_path) {
-      // Return a generated text preview if no physical PDF is uploaded yet for sample candidate
-      res.setHeader('Content-Type', 'text/html; charset=utf-8')
-      return res.send(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>Resume - ${share.full_name}</title>
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 40px; background: #f8fafc; color: #1e293b; }
-            .card { background: white; padding: 32px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); max-width: 750px; margin: 0 auto; }
-            .badge { display: inline-block; background: #dbeafe; color: #1e40af; padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; margin-bottom: 16px; }
-            h1 { margin-top: 0; color: #0f172a; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; }
-            .section { margin-top: 24px; }
-            .section-title { font-weight: 700; color: #334155; text-transform: uppercase; font-size: 13px; letter-spacing: 0.05em; margin-bottom: 8px; }
-          </style>
-        </head>
-        <body>
-          <div class="card">
-            <span class="badge">CONFIDENTIAL CANDIDATE PROFILE</span>
-            <h1>${share.full_name}</h1>
-            <div class="section">
-              <div class="section-title">Security & Validity</div>
-              <p>24-Hour Secure Share Active. Expires at: <strong>${share.access_expires_at}</strong></p>
-            </div>
-            <div class="section">
-              <div class="section-title">Candidate Details</div>
-              <p>Candidate ID: #${share.candidate_id}</p>
-              <p>Authorized for Customer Review under DTS Service Agreement.</p>
-            </div>
-          </div>
-        </body>
-        </html>
-      `)
-    }
-
-    try {
-      const fullPath = resolvePrivateStoragePath(share.resume_path)
-      const fileStats = await stat(fullPath)
-      res.setHeader('Content-Type', 'application/pdf')
-      res.setHeader('Content-Length', fileStats.size)
-      res.setHeader('Content-Disposition', `inline; filename="Candidate_${share.candidate_id}_Resume.pdf"`)
-      createReadStream(fullPath).pipe(res)
-    } catch {
-      // If file not physically on disk, render fallback profile
-      res.setHeader('Content-Type', 'text/html; charset=utf-8')
-      return res.send(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>Resume - ${share.full_name}</title>
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 40px; background: #f8fafc; color: #1e293b; }
-            .card { background: white; padding: 32px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); max-width: 750px; margin: 0 auto; }
-            .badge { display: inline-block; background: #dbeafe; color: #1e40af; padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; margin-bottom: 16px; }
-            h1 { margin-top: 0; color: #0f172a; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; }
-          </style>
-        </head>
-        <body>
-          <div class="card">
-            <span class="badge">CONFIDENTIAL PROFILE PREVIEW</span>
-            <h1>${share.full_name}</h1>
-            <p>Candidate ID: #${share.candidate_id}</p>
-            <p>Active 24-hr access window until: <strong>${share.access_expires_at}</strong></p>
-            <p>File reference: <code>${share.resume_path}</code></p>
-          </div>
-        </body>
-        </html>
-      `)
-    }
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Length', fileStats.size)
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${String(share.file_name).replace(/[^a-zA-Z0-9._-]/g, '_')}"`,
+    )
+    return createReadStream(fullPath).pipe(res)
   } catch (error) {
     return next(error)
   }

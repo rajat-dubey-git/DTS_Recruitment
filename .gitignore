@@ -10,5 +10,9 @@ database command and value.txt
 database_phase2_agreements.sql
 database_additive_migration.sql
 *.sql
+!database_add_customer_candidate_decisions.sql
 *.txt
 .kilo/
+DTS_Private_Storage/
+DTS_Solutions_Architectire_Blueprint/
+

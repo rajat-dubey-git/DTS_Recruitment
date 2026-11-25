@@ -1,8 +1,16 @@
 import { Router } from 'express'
 import { createInvitation } from './user.controller.js'
 import {
+  downloadAdminCandidateDocument,
+  getAdminCandidateDetails,
+  listAdminCandidates,
+  reviewAdminCandidateDocument,
+} from './candidate.controller.js'
+import {
   getDashboardSummary,
   getRequirementCreationOptions,
+  getRequirementAssignmentOptions,
+  assignRequirementRecruiter,
   approveServiceOrder,
   convertRequirementIntakeRecord,
   createWorkspaceRecord,
@@ -30,6 +38,10 @@ const router = Router()
 router.use(requireAuth, requireAdmin)
 
 router.get('/dashboard', getDashboardSummary)
+router.get('/candidates', listAdminCandidates)
+router.get('/candidates/:candidateId', getAdminCandidateDetails)
+router.get('/candidates/:candidateId/documents/:documentId/download', downloadAdminCandidateDocument)
+router.patch('/candidates/:candidateId/documents/:documentId/review', reviewAdminCandidateDocument)
 router.get('/customers', listCustomers)
 router.get('/customer-addresses', listCustomerAddresses)
 router.get('/customer-contacts', listCustomerContacts)
@@ -43,6 +55,8 @@ router.get('/rate-cards', listRateCards)
 router.get('/service-orders', listServiceOrders)
 router.get('/requirements', listRequirements)
 router.get('/requirements/options', getRequirementCreationOptions)
+router.get('/requirements/:requirementId/assignment-options', getRequirementAssignmentOptions)
+router.post('/requirements/:requirementId/assign', assignRequirementRecruiter)
 router.get('/requirement-intakes', listRequirementIntakes)
 router.get('/requirement-intakes/:intakeId/options', getRequirementIntakeOptions)
 router.post('/requirement-intakes/:intakeId/convert', convertRequirementIntakeRecord)

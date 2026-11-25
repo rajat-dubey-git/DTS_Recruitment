@@ -6,6 +6,7 @@ import {
   activateAdminAgreement,
   createCustomerAgreementRequest,
   downloadAdminSignedCopy,
+  downloadAdminAgreement,
   downloadCustomerDraft,
   downloadCustomerSignedCopy,
   readAdminAgreement,
@@ -94,6 +95,11 @@ router.post(
   '/admin/:agreementId/versions/:versionId/review',
   requireAdmin,
   reviewAdminAgreement,
+)
+router.get(
+  '/admin/:agreementId/versions/:versionId/draft.pdf',
+  requireAdmin,
+  downloadAdminAgreement,
 )
 router.get(
   '/admin/:agreementId/versions/:versionId/signed.pdf',

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Edit2, FileText, Filter, Mail, Plus, Search } from 'lucide-react'
+import { Edit2, FileText, Filter, Mail, Plus, Search, UserRoundPlus, X } from 'lucide-react'
 import { workspaceApi } from '../../api/workspace'
 import type {
   AdminModule,
@@ -23,7 +23,7 @@ const moduleConfig: Record<AdminModule, {
   title: string
   description: string
   inviteLabel: string | null
-  columns: Array<{ key: string; label: string }>
+  columns: Array<{ key: string; label: string; enumFilterKey?: string }>
 }> = {
   customers: {
     title: 'Customers',
@@ -33,7 +33,7 @@ const moduleConfig: Record<AdminModule, {
       { key: 'customer_code', label: 'Code' },
       { key: 'company_name', label: 'Company' },
       { key: 'industry', label: 'Industry' },
-      { key: 'status', label: 'Status' },
+      { key: 'status', label: 'Status', enumFilterKey: 'status' },
       { key: 'payment_terms_days', label: 'Payment terms (days)' },
     ],
   },
@@ -43,7 +43,7 @@ const moduleConfig: Record<AdminModule, {
     inviteLabel: null,
     columns: [
       { key: 'company_name', label: 'Company' },
-      { key: 'address_type', label: 'Type' },
+      { key: 'address_type', label: 'Type', enumFilterKey: 'ca.address_type' },
       { key: 'address_line', label: 'Address' },
       { key: 'city', label: 'City' },
       { key: 'state', label: 'State' },
@@ -60,9 +60,9 @@ const moduleConfig: Record<AdminModule, {
       { key: 'full_name', label: 'Name' },
       { key: 'email', label: 'Email' },
       { key: 'designation', label: 'Designation' },
-      { key: 'contact_type', label: 'Contact type' },
+      { key: 'contact_type', label: 'Contact type', enumFilterKey: 'cc.contact_type' },
       { key: 'is_primary', label: 'Primary' },
-      { key: 'status', label: 'Status' },
+      { key: 'status', label: 'Status', enumFilterKey: 'cc.status' },
     ],
   },
   recruiters: {
@@ -72,7 +72,7 @@ const moduleConfig: Record<AdminModule, {
     columns: [
       { key: 'full_name', label: 'Name' },
       { key: 'email', label: 'Email' },
-      { key: 'status', label: 'Status' },
+      { key: 'status', label: 'Status', enumFilterKey: 'status' },
       { key: 'last_login_at', label: 'Last sign in' },
     ],
   },
@@ -84,9 +84,9 @@ const moduleConfig: Record<AdminModule, {
       { key: 'full_name', label: 'Name' },
       { key: 'email', label: 'Email' },
       { key: 'mobile', label: 'Mobile' },
-      { key: 'role', label: 'Role' },
+      { key: 'role', label: 'Role', enumFilterKey: 'u.role' },
       { key: 'customer_company', label: 'Customer' },
-      { key: 'status', label: 'Status' },
+      { key: 'status', label: 'Status', enumFilterKey: 'u.status' },
       { key: 'last_login_at', label: 'Last sign in' },
     ],
   },
@@ -106,7 +106,7 @@ const moduleConfig: Record<AdminModule, {
     columns: [
       { key: 'service_code', label: 'Code' },
       { key: 'service_name', label: 'Service' },
-      { key: 'employment_model', label: 'Employment model' },
+      { key: 'employment_model', label: 'Employment model', enumFilterKey: 'employment_model' },
     ],
   },
   'job-profiles': {
@@ -119,7 +119,7 @@ const moduleConfig: Record<AdminModule, {
       { key: 'category', label: 'Category' },
       { key: 'default_experience_min', label: 'Min. experience' },
       { key: 'default_experience_max', label: 'Max. experience' },
-      { key: 'status', label: 'Status' },
+      { key: 'status', label: 'Status', enumFilterKey: 'status' },
     ],
   },
   agreements: {
@@ -130,7 +130,7 @@ const moduleConfig: Record<AdminModule, {
       { key: 'agreement_number', label: 'Agreement' },
       { key: 'company_name', label: 'Customer company' },
       { key: 'title', label: 'Title' },
-      { key: 'status', label: 'Status' },
+      { key: 'status', label: 'Status', enumFilterKey: 'a.status' },
       { key: 'effective_date', label: 'Effective date' },
       { key: 'expiry_date', label: 'Expiry date' },
       { key: 'signed_date', label: 'Signed date' },
@@ -145,10 +145,10 @@ const moduleConfig: Record<AdminModule, {
       { key: 'company_name', label: 'Customer company' },
       { key: 'service_name', label: 'Service' },
       { key: 'profile_name', label: 'Job profile' },
-      { key: 'fee_type', label: 'Fee type' },
-      { key: 'fee_basis', label: 'Fee basis' },
+      { key: 'fee_type', label: 'Fee type', enumFilterKey: 'rc.fee_type' },
+      { key: 'fee_basis', label: 'Fee basis', enumFilterKey: 'rc.fee_basis' },
       { key: 'fee_value', label: 'Fee value' },
-      { key: 'billing_frequency', label: 'Billing frequency' },
+      { key: 'billing_frequency', label: 'Billing frequency', enumFilterKey: 'rc.billing_frequency' },
       { key: 'effective_from', label: 'Effective from' },
       { key: 'effective_to', label: 'Effective to' },
     ],
@@ -165,7 +165,7 @@ const moduleConfig: Record<AdminModule, {
       { key: 'title', label: 'Title' },
       { key: 'start_date', label: 'Start date' },
       { key: 'end_date', label: 'End date' },
-      { key: 'status', label: 'Status' },
+      { key: 'status', label: 'Status', enumFilterKey: 'so.status' },
     ],
   },
   requirements: {
@@ -178,8 +178,9 @@ const moduleConfig: Record<AdminModule, {
       { key: 'job_title', label: 'Job title' },
       { key: 'profile_name', label: 'Job profile' },
       { key: 'headcount', label: 'Headcount' },
-      { key: 'work_mode', label: 'Work mode' },
-      { key: 'status', label: 'Status' },
+      { key: 'work_mode', label: 'Work mode', enumFilterKey: 'r.work_mode' },
+      { key: 'assigned_recruiters', label: 'Assigned recruiters' },
+      { key: 'status', label: 'Status', enumFilterKey: 'r.status' },
     ],
   },
   'requirement-intakes': {
@@ -192,9 +193,9 @@ const moduleConfig: Record<AdminModule, {
       { key: 'email', label: 'Email' },
       { key: 'job_title', label: 'Requested job' },
       { key: 'headcount', label: 'Headcount' },
-      { key: 'work_mode', label: 'Work mode' },
-      { key: 'employment_schedule', label: 'Schedule' },
-      { key: 'status', label: 'Status' },
+      { key: 'work_mode', label: 'Work mode', enumFilterKey: 'i.work_mode' },
+      { key: 'employment_schedule', label: 'Schedule', enumFilterKey: 'i.employment_schedule' },
+      { key: 'status', label: 'Status', enumFilterKey: 'i.status' },
       { key: 'submitted_at', label: 'Submitted' },
     ],
   },
@@ -238,7 +239,9 @@ export default function AdminWorkspacePage() {
   const [total, setTotal] = useState(0)
   const [searchText, setSearchText] = useState('')
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState('ALL')
+  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({})
+  const [filterOptions, setFilterOptions] = useState<Record<string, Array<string | number>>>({})
+  const [openFilter, setOpenFilter] = useState<string | null>(null)
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -256,9 +259,18 @@ export default function AdminWorkspacePage() {
   const [requestError, setRequestError] = useState('')
   const [requestResult, setRequestResult] = useState<RequirementIntakeResult | null>(null)
   const [conversionIntakeId, setConversionIntakeId] = useState<number | null>(null)
+  const [assignmentRequirement, setAssignmentRequirement] = useState<{ id: number; title: string } | null>(null)
+  const [assignmentRecruiters, setAssignmentRecruiters] = useState<Array<{ user_id: number; full_name: string; email: string }>>([])
+  const [assignmentCurrent, setAssignmentCurrent] = useState<Array<{ recruiter_id: number; assignment_role: 'LEAD' | 'SUPPORT'; full_name: string; email: string }>>([])
+  const [assignmentRole, setAssignmentRole] = useState<'LEAD' | 'SUPPORT'>('LEAD')
+  const [assignmentRecruiterId, setAssignmentRecruiterId] = useState('')
+  const [assignmentBusy, setAssignmentBusy] = useState(false)
+  const [assignmentError, setAssignmentError] = useState('')
 
   useEffect(() => {
-    setStatusFilter('ALL')
+    setColumnFilters({})
+    setFilterOptions({})
+    setOpenFilter(null)
     setOffset(0)
     setSearchText('')
     setSearch('')
@@ -282,12 +294,13 @@ export default function AdminWorkspacePage() {
       limit: PAGE_SIZE,
       offset,
       search,
-      status: statusFilter !== 'ALL' ? statusFilter : undefined,
+      filterColumns: columnFilters,
     })
       .then((page) => {
         if (!active) return
         setRows(page.rows)
         setTotal(page.total)
+        setFilterOptions(page.filterOptions ?? {})
       })
       .catch((loadError: unknown) => {
         if (active) {
@@ -301,7 +314,7 @@ export default function AdminWorkspacePage() {
     return () => {
       active = false
     }
-  }, [selectedModule, offset, search, statusFilter, reloadKey])
+  }, [selectedModule, offset, search, columnFilters, reloadKey])
 
   const sendInvitation = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -327,10 +340,11 @@ export default function AdminWorkspacePage() {
             limit: PAGE_SIZE,
             offset: 0,
             search,
-            status: statusFilter !== 'ALL' ? statusFilter : undefined,
+            filterColumns: columnFilters,
           })
           setRows(page.rows)
           setTotal(page.total)
+          setFilterOptions(page.filterOptions ?? {})
         } catch (refreshError) {
           setError(refreshError instanceof Error ? refreshError.message : 'Invitation created, but the list could not be refreshed.')
         }
@@ -339,6 +353,44 @@ export default function AdminWorkspacePage() {
       setInviteError(inviteFailure instanceof Error ? inviteFailure.message : 'Unable to create the invitation.')
     } finally {
       setInviteBusy(false)
+    }
+  }
+
+  const openRequirementAssignment = async (requirementId: number, title: string) => {
+    setAssignmentRequirement({ id: requirementId, title })
+    setAssignmentBusy(true)
+    setAssignmentError('')
+    setAssignmentRecruiters([])
+    setAssignmentRecruiterId('')
+    try {
+      const options = await workspaceApi.requirementAssignmentOptions(requirementId)
+      setAssignmentRecruiters(options.recruiters)
+      const currentLead = options.assignments.find((assignment) => assignment.assignment_role === 'LEAD')
+      setAssignmentRole(currentLead?.assignment_role ?? 'LEAD')
+      setAssignmentRecruiterId(String(currentLead?.recruiter_id ?? options.recruiters[0]?.user_id ?? ''))
+      setAssignmentCurrent(options.assignments)
+    } catch (loadError) {
+      setAssignmentError(loadError instanceof Error ? loadError.message : 'Unable to load recruiter assignment options.')
+    } finally {
+      setAssignmentBusy(false)
+    }
+  }
+
+  const saveRequirementAssignment = async () => {
+    if (!assignmentRequirement || !assignmentRecruiterId) return
+    setAssignmentBusy(true)
+    setAssignmentError('')
+    try {
+      await workspaceApi.assignRequirementRecruiter(assignmentRequirement.id, {
+        recruiterId: Number(assignmentRecruiterId),
+        assignmentRole,
+      })
+      setAssignmentRequirement(null)
+      setReloadKey((value) => value + 1)
+    } catch (saveError) {
+      setAssignmentError(saveError instanceof Error ? saveError.message : 'Unable to assign this recruiter.')
+    } finally {
+      setAssignmentBusy(false)
     }
   }
 
@@ -395,34 +447,6 @@ export default function AdminWorkspacePage() {
             <p>{total.toLocaleString()} records</p>
           </div>
           <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: '#f3f4f6', padding: '0.3rem 0.6rem', borderRadius: '6px' }}>
-              <Filter size={15} color="#4b5563" />
-              <select
-                aria-label="Filter by status"
-                value={statusFilter}
-                onChange={(event) => {
-                  setStatusFilter(event.target.value)
-                  setOffset(0)
-                }}
-                style={{ background: 'transparent', border: 'none', fontSize: '0.85rem', outline: 'none', cursor: 'pointer' }}
-              >
-                <option value="ALL">All Statuses</option>
-                <option value="ACTIVE">Active</option>
-                <option value="INACTIVE">Inactive</option>
-                <option value="DRAFT">Draft</option>
-                <option value="PENDING_APPROVAL">Pending Approval</option>
-                <option value="APPROVED">Approved</option>
-                <option value="OPEN">Open</option>
-                <option value="ON_HOLD">On Hold</option>
-                <option value="FILLED">Filled</option>
-                <option value="PENDING_SIGNATURE">Pending Signature</option>
-                <option value="COMPLETED">Completed</option>
-                <option value="CANCELLED">Cancelled</option>
-                <option value="SUBMITTED">Submitted</option>
-                <option value="CONVERTED">Converted</option>
-                <option value="EXPIRED">Expired</option>
-              </select>
-            </div>
             <div className="customer-search">
               <Search size={16} />
               <input
@@ -440,7 +464,89 @@ export default function AdminWorkspacePage() {
           <table className="customer-table">
             <thead>
               <tr>
-                {config.columns.map((column) => <th key={column.key}>{column.label}</th>)}
+                {config.columns.map((column) => (
+                  <th key={column.key}>
+                    {column.label}
+                    {column.enumFilterKey && (
+                      <span style={{ position: 'relative', display: 'inline-flex', marginLeft: '0.35rem' }}>
+                        <button
+                          type="button"
+                          aria-label={`Filter ${column.label}`}
+                          title={columnFilters[column.enumFilterKey] ? `Filtered by ${columnFilters[column.enumFilterKey]}` : `Filter ${column.label}`}
+                          onClick={() => setOpenFilter((current) => current === column.enumFilterKey ? null : column.enumFilterKey!)}
+                          style={{
+                            border: 0,
+                            background: 'transparent',
+                            color: columnFilters[column.enumFilterKey] ? '#2563eb' : '#64748b',
+                            padding: 0,
+                            cursor: 'pointer',
+                            verticalAlign: 'middle',
+                          }}
+                        >
+                          <Filter size={13} />
+                        </button>
+                        {openFilter === column.enumFilterKey && (
+                          <div
+                            role="group"
+                            aria-label={`${column.label} filter options`}
+                            onClick={(event) => event.stopPropagation()}
+                            style={{
+                              position: 'absolute',
+                              zIndex: 30,
+                              top: '1.5rem',
+                              left: 0,
+                              minWidth: '180px',
+                              padding: '0.65rem',
+                              background: 'white',
+                              border: '1px solid #dbe3ef',
+                              borderRadius: '8px',
+                              boxShadow: '0 8px 24px #0f172a20',
+                            }}
+                          >
+                            <select
+                              aria-label={`Select ${column.label}`}
+                              value={columnFilters[column.enumFilterKey] ?? ''}
+                              onChange={(event) => {
+                                const value = event.target.value
+                                setColumnFilters((current) => {
+                                  const next = { ...current }
+                                  if (value) next[column.enumFilterKey!] = value
+                                  else delete next[column.enumFilterKey!]
+                                  return next
+                                })
+                                setOffset(0)
+                              }}
+                              style={{ width: '100%', padding: '0.4rem', border: '1px solid #dbe3ef', borderRadius: '5px' }}
+                            >
+                              <option value="" disabled>Select a value</option>
+                              {(filterOptions[column.enumFilterKey] ?? []).map((value) => (
+                                <option key={String(value)} value={String(value)}>{display(value)}</option>
+                              ))}
+                            </select>
+                            {columnFilters[column.enumFilterKey] && (
+                              <button
+                                type="button"
+                                className="btn btn-outline"
+                                style={{ marginTop: '0.5rem', padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                                onClick={() => {
+                                  setColumnFilters((current) => {
+                                    const next = { ...current }
+                                    delete next[column.enumFilterKey!]
+                                    return next
+                                  })
+                                  setOffset(0)
+                                  setOpenFilter(null)
+                                }}
+                              >
+                                <X size={12} /> Clear filter
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </span>
+                    )}
+                  </th>
+                ))}
                 <th>Actions</th>
               </tr>
             </thead>
@@ -514,6 +620,20 @@ export default function AdminWorkspacePage() {
                             Review &amp; convert
                           </button>
                         ) : null
+                      )}
+
+                      {selectedModule === 'requirements' && ['APPROVED', 'OPEN'].includes(String(row.status)) && (
+                        <button
+                          type="button"
+                          className="btn btn-outline"
+                          style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                          onClick={() => void openRequirementAssignment(
+                            Number(row.requirement_id),
+                            String(row.job_title ?? row.requirement_number ?? 'Requirement'),
+                          )}
+                        >
+                          <UserRoundPlus size={13} /> Assign recruiter
+                        </button>
                       )}
 
                       {selectedModule === 'service-orders' && (
@@ -726,6 +846,80 @@ export default function AdminWorkspacePage() {
             setReloadKey((value) => value + 1)
           }}
         />
+      )}
+
+      {assignmentRequirement && (
+        <div className="customer-modal-overlay">
+          <div className="customer-modal" role="dialog" aria-modal="true" aria-labelledby="assignment-title">
+            <div className="customer-modal-heading">
+              <div>
+                <h2 id="assignment-title">Assign recruiter</h2>
+                <p>{assignmentRequirement.title}</p>
+              </div>
+              <button
+                type="button"
+                className="customer-modal-close"
+                onClick={() => setAssignmentRequirement(null)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            {assignmentCurrent.length > 0 && (
+              <div className="database-read-only">
+                <strong>Currently assigned</strong>
+                <ul>
+                  {assignmentCurrent.map((assignment) => (
+                    <li key={`${assignment.recruiter_id}-${assignment.assignment_role}`}>
+                      {assignment.full_name} ({assignment.assignment_role.toLowerCase()})
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {assignmentError && <div className="customer-form-error" role="alert">{assignmentError}</div>}
+            <label className="form-field">
+              <span>Active recruiter</span>
+              <select
+                value={assignmentRecruiterId}
+                onChange={(event) => setAssignmentRecruiterId(event.target.value)}
+                disabled={assignmentBusy || assignmentRecruiters.length === 0}
+              >
+                <option value="">Select a recruiter</option>
+                {assignmentRecruiters.map((recruiter) => (
+                  <option key={recruiter.user_id} value={recruiter.user_id}>
+                    {recruiter.full_name} — {recruiter.email}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="form-field">
+              <span>Assignment role</span>
+              <select
+                value={assignmentRole}
+                onChange={(event) => setAssignmentRole(event.target.value as 'LEAD' | 'SUPPORT')}
+                disabled={assignmentBusy}
+              >
+                <option value="LEAD">Lead recruiter</option>
+                <option value="SUPPORT">Supporting recruiter</option>
+              </select>
+              <small>Assigning a new lead replaces the existing lead. Supporting recruiters can be added without replacing the lead.</small>
+            </label>
+            <div className="customer-modal-actions">
+              <button type="button" className="btn btn-outline" onClick={() => setAssignmentRequirement(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={assignmentBusy || !assignmentRecruiterId}
+                onClick={() => void saveRequirementAssignment()}
+              >
+                {assignmentBusy ? 'Saving…' : 'Save assignment'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

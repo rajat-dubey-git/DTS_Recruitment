@@ -11,6 +11,7 @@ import agreementRoutes from './agreements/agreement.routes.js'
 import recruiterRoutes from './recruiter/recruiter.routes.js'
 import customerRoutes from './customer/customer.routes.js'
 import documentRoutes from './documents/document.routes.js'
+import candidateRoutes from './candidate/candidate.routes.js'
 
 const app = express()
 const allowedOrigins = (process.env.CORS_ORIGIN || '')
@@ -39,6 +40,7 @@ app.use('/api/recruiter', recruiterRoutes)
 app.use('/api/customer', customerRoutes)
 app.use('/api/documents', documentRoutes)
 app.use('/api/admin', adminRoutes)
+app.use('/api/candidate', candidateRoutes)
 app.use('/api/auth/invitations', invitationRoutes)
 app.use('/api/public', requirementIntakeRoutes)
 

@@ -9,6 +9,7 @@ import {
   CheckCircle,
   AlertCircle,
   Users,
+  FileText,
 } from 'lucide-react'
 import {
   Candidate,
@@ -23,6 +24,7 @@ import {
   submitCandidateToRequirement,
 } from '../api/recruitment'
 import { DocumentPreviewModal } from '../components/DocumentPreviewModal'
+import RecruiterCandidateDetailsModal from '../components/RecruiterCandidateDetailsModal'
 
 export default function RecruiterWorkspacePage() {
   const [requirements, setRequirements] = useState<RecruiterRequirement[]>([])
@@ -36,6 +38,7 @@ export default function RecruiterWorkspacePage() {
   const [skillFilter, setSkillFilter] = useState('')
   const [locFilter, setLocFilter] = useState('')
   const [expMin, setExpMin] = useState<number | undefined>(undefined)
+  const [consentConfirmed, setConsentConfirmed] = useState(false)
 
   const [loading, setLoading] = useState(false)
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -44,6 +47,7 @@ export default function RecruiterWorkspacePage() {
   const [previewShareId, setPreviewShareId] = useState<number | null>(null)
   const [previewCandidateName, setPreviewCandidateName] = useState('')
   const [previewExpiresAt, setPreviewExpiresAt] = useState<string | null>(null)
+  const [detailCandidateId, setDetailCandidateId] = useState<number | null>(null)
 
   useEffect(() => {
     loadRequirements()
@@ -57,6 +61,10 @@ export default function RecruiterWorkspacePage() {
       }
     }
   }, [selectedReq, activeTab])
+
+  useEffect(() => {
+    setConsentConfirmed(false)
+  }, [selectedReq?.requirement_id])
 
   async function loadRequirements() {
     try {
@@ -88,6 +96,7 @@ export default function RecruiterWorkspacePage() {
     try {
       setLoading(true)
       const data = await searchCandidates({
+        requirementId: selectedReq?.requirement_id,
         query: searchQuery || undefined,
         skill: skillFilter || undefined,
         location: locFilter || undefined,
@@ -104,14 +113,23 @@ export default function RecruiterWorkspacePage() {
 
   async function handleCandidateSubmit(candidateId: number) {
     if (!selectedReq) return
+    if (selectedReq.status !== 'OPEN') {
+      setStatusMessage({ type: 'error', text: 'Only open requirements can receive candidate submissions.' })
+      return
+    }
+    if (!consentConfirmed) {
+      setStatusMessage({ type: 'error', text: 'Confirm candidate consent before submitting this profile.' })
+      return
+    }
     try {
       setLoading(true)
       const res = await submitCandidateToRequirement({
         candidateId,
         requirementId: selectedReq.requirement_id,
-        screeningNotes: 'Screened for job requirements and verified right-to-represent consent.',
+        consentConfirmed: true,
       })
       setStatusMessage({ type: 'success', text: res.message })
+      setConsentConfirmed(false)
       await loadSubmissions(selectedReq.requirement_id)
       setActiveTab('submissions')
     } catch (err: unknown) {
@@ -183,26 +201,17 @@ export default function RecruiterWorkspacePage() {
             {requirements.map((req) => {
               const isSelected = selectedReq?.requirement_id === req.requirement_id
               return (
-                <div
+                <button
+                  type="button"
                   key={req.requirement_id}
                   onClick={() => setSelectedReq(req)}
-                  className={`p-4 cursor-pointer transition-colors ${
+                  className={`block w-full p-4 text-left transition-colors ${
                     isSelected ? 'bg-blue-50/70 border-l-4 border-blue-600' : 'hover:bg-slate-50'
                   }`}
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-blue-600 tracking-wide uppercase">{req.requirement_code}</span>
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                        req.priority === 'CRITICAL'
-                          ? 'bg-rose-100 text-rose-700'
-                          : req.priority === 'HIGH'
-                          ? 'bg-amber-100 text-amber-700'
-                          : 'bg-slate-100 text-slate-600'
-                      }`}
-                    >
-                      {req.priority}
-                    </span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">{req.status}</span>
                   </div>
                   <h3 className="font-semibold text-slate-800 text-sm mt-1">{req.job_title}</h3>
                   <p className="text-xs text-slate-500 mt-0.5">{req.company_name}</p>
@@ -210,9 +219,12 @@ export default function RecruiterWorkspacePage() {
                     <span>{req.open_positions} open position{req.open_positions > 1 ? 's' : ''}</span>
                     <span className="text-slate-600 font-medium">{req.total_submissions} submitted</span>
                   </div>
-                </div>
+                </button>
               )
             })}
+            {!loading && requirements.length === 0 && (
+              <p className="p-5 text-sm text-slate-500">No requirements are assigned to your account.</p>
+            )}
           </div>
         </div>
 
@@ -234,7 +246,6 @@ export default function RecruiterWorkspacePage() {
                     <span className="font-medium text-slate-700">{selectedReq.job_profile_title || 'General'}</span>
                   </p>
                 </div>
-
                 {/* Tabs */}
                 <div className="flex items-center bg-slate-200/80 p-1 rounded-lg">
                   <button
@@ -258,6 +269,21 @@ export default function RecruiterWorkspacePage() {
                 </div>
               </div>
 
+              <section className="border-b border-slate-200 p-5">
+                <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+                  <div><p className="text-xs text-slate-500">Work location / mode</p><p className="font-medium text-slate-800">{selectedReq.work_location || 'Not specified'} · {selectedReq.work_mode}</p></div>
+                  <div><p className="text-xs text-slate-500">Experience</p><p className="font-medium text-slate-800">{selectedReq.experience_min_years ?? 0}–{selectedReq.experience_max_years ?? 'Any'} years</p></div>
+                  <div><p className="text-xs text-slate-500">Employment</p><p className="font-medium text-slate-800">{selectedReq.employment_schedule.replace('_', ' ')}{selectedReq.hours_per_week ? ` · ${selectedReq.hours_per_week} hrs/week` : ''}</p></div>
+                  <div><p className="text-xs text-slate-500">Salary range</p><p className="font-medium text-slate-800">{selectedReq.salary_min ?? 'Not listed'} – {selectedReq.salary_max ?? 'Not listed'}</p></div>
+                  <div><p className="text-xs text-slate-500">Target join date</p><p className="font-medium text-slate-800">{selectedReq.target_join_date ? new Date(selectedReq.target_join_date).toLocaleDateString() : 'Not specified'}</p></div>
+                  <div><p className="text-xs text-slate-500">Assignment</p><p className="font-medium text-slate-800">{selectedReq.assignment_role}</p></div>
+                </div>
+                <div className="mt-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Full requirement description</p>
+                  <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedReq.job_description || 'No description provided.'}</p>
+                </div>
+              </section>
+
               {/* Tab 1: Current Submissions & 24h Sharing */}
               {activeTab === 'submissions' && (
                 <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -279,11 +305,11 @@ export default function RecruiterWorkspacePage() {
                               <h4 className="font-bold text-slate-800 text-sm">{sub.candidate_name}</h4>
                               <span
                                 className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
-                                  sub.application_status === 'CUSTOMER_SHORTLISTED'
+                                sub.application_status === 'SHORTLISTED'
                                     ? 'bg-emerald-100 text-emerald-800'
-                                    : sub.application_status === 'CUSTOMER_REJECTED'
+                                  : sub.application_status === 'REJECTED'
                                     ? 'bg-rose-100 text-rose-800'
-                                    : sub.application_status === 'PRESENTED'
+                                  : sub.application_status === 'INTERVIEW'
                                     ? 'bg-purple-100 text-purple-800'
                                     : 'bg-blue-100 text-blue-800'
                                 }`}
@@ -298,7 +324,13 @@ export default function RecruiterWorkspacePage() {
 
                           {/* Share & Actions */}
                           <div className="flex items-center gap-2">
-                            {sub.share_id ? (
+                            <button
+                              onClick={() => setDetailCandidateId(sub.candidate_id)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50"
+                            >
+                              <FileText className="w-3.5 h-3.5" /> Profile
+                            </button>
+                            {sub.share_id && sub.share_is_valid ? (
                               <div className="flex items-center gap-2">
                                 <button
                                   onClick={() => {
@@ -311,40 +343,36 @@ export default function RecruiterWorkspacePage() {
                                   <Eye className="w-3.5 h-3.5" />
                                   Preview
                                 </button>
-                                {sub.share_is_valid ? (
-                                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-1 rounded border border-emerald-200">
-                                    <Clock className="w-3 h-3 text-emerald-600" />
-                                    Active 24h Share
-                                  </span>
-                                ) : (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-1 rounded border border-emerald-200">
+                                  <Clock className="w-3 h-3 text-emerald-600" />
+                                  Active 24h Share
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                {sub.share_id && (
                                   <span className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-700 bg-rose-50 px-2 py-1 rounded border border-rose-200">
                                     <AlertCircle className="w-3 h-3 text-rose-600" />
                                     Expired
                                   </span>
                                 )}
+                                {sub.resume_verification_status === 'VERIFIED' && sub.resume_malware_scan_status === 'CLEAN' ? (
+                                  <button
+                                    onClick={() => handleGenerateShare(sub.application_id)}
+                                    disabled={loading}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition shadow-sm disabled:opacity-50"
+                                  >
+                                    <Share2 className="w-3.5 h-3.5" />
+                                    Create 24h customer share
+                                  </button>
+                                ) : (
+                                  <span className="text-[11px] text-amber-700">Resume requires admin verification and a clean scan.</span>
+                                )}
                               </div>
-                            ) : (
-                              <button
-                                onClick={() => handleGenerateShare(sub.application_id)}
-                                disabled={loading}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition shadow-sm"
-                              >
-                                <Share2 className="w-3.5 h-3.5" />
-                                Send 24h Share to Customer
-                              </button>
                             )}
                           </div>
                         </div>
 
-                        {/* Customer feedback if available */}
-                        {sub.customer_decision && (
-                          <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                            <span className="text-slate-500">
-                              Customer Decision: <strong className="text-slate-800">{sub.customer_decision}</strong>
-                            </span>
-                            {sub.decision_notes && <span className="italic text-slate-600">"{sub.decision_notes}"</span>}
-                          </div>
-                        )}
                       </div>
                     ))
                   )}
@@ -355,6 +383,14 @@ export default function RecruiterWorkspacePage() {
               {activeTab === 'search' && (
                 <div className="flex-1 flex flex-col overflow-hidden">
                   {/* Search filters */}
+                  <label className="flex items-start gap-2 p-4 text-xs text-slate-600 border-b border-slate-200 bg-amber-50">
+                    <input
+                      type="checkbox"
+                      checked={consentConfirmed}
+                      onChange={(event) => setConsentConfirmed(event.target.checked)}
+                    />
+                    <span>I confirm the candidate has explicitly consented to be represented for this requirement and to sharing their profile with the customer.</span>
+                  </label>
                   <div className="p-4 border-b border-slate-200 bg-slate-50 grid grid-cols-1 md:grid-cols-4 gap-3">
                     <input
                       type="text"
@@ -409,7 +445,12 @@ export default function RecruiterWorkspacePage() {
                           <div>
                             <div className="flex items-center gap-2">
                               <h4 className="font-bold text-slate-800 text-sm">{cand.full_name}</h4>
-                              <span className="text-xs text-slate-500">{cand.current_title || 'Software Engineer'}</span>
+                              <span className="text-xs text-slate-500">{cand.candidate_code}</span>
+                              {cand.match_score !== null && (
+                                <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
+                                  {cand.match_score}% skill match
+                                </span>
+                              )}
                             </div>
                             <p className="text-xs text-slate-500 mt-1">
                               <strong>Exp:</strong> {cand.total_experience_years}y | <strong>Location:</strong> {cand.current_location} |{' '}
@@ -418,12 +459,23 @@ export default function RecruiterWorkspacePage() {
                             <p className="text-xs text-slate-600 mt-1">
                               <strong>Skills:</strong> {cand.primary_skills}
                             </p>
+                            {cand.missing_mandatory_skills.length > 0 && (
+                              <p className="mt-1 text-xs text-rose-700"><strong>Missing required:</strong> {cand.missing_mandatory_skills.join(', ')}</p>
+                            )}
+                            {!cand.meets_experience && <p className="mt-1 text-xs text-amber-700">Outside the target experience range.</p>}
                           </div>
 
                           <div className="flex items-center gap-2">
                             <button
+                              type="button"
+                              onClick={() => setDetailCandidateId(cand.candidate_id)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50"
+                            >
+                              <FileText className="w-3.5 h-3.5" /> Full profile
+                            </button>
+                            <button
                               onClick={() => handleCandidateSubmit(cand.candidate_id)}
-                              disabled={loading}
+                              disabled={loading || !consentConfirmed || selectedReq.status !== 'OPEN'}
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 transition shadow-sm"
                             >
                               <UserCheck className="w-3.5 h-3.5" />
@@ -452,6 +504,11 @@ export default function RecruiterWorkspacePage() {
         isOpen={Boolean(previewShareId)}
         onClose={() => setPreviewShareId(null)}
         expiresAt={previewExpiresAt}
+      />
+      <RecruiterCandidateDetailsModal
+        candidateId={detailCandidateId}
+        requirementId={selectedReq?.requirement_id ?? null}
+        onClose={() => setDetailCandidateId(null)}
       />
     </div>
   )

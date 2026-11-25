@@ -1,4 +1,12 @@
-import { Candidate, CustomerSharedCandidate, RecruiterRequirement, RequirementSubmission } from '../types/recruitment'
+import {
+  Candidate,
+  CustomerSharedCandidate,
+  RecruiterApplication,
+  RecruiterCandidateDetails,
+  RecruiterInterview,
+  RecruiterRequirement,
+  RequirementSubmission,
+} from '../types/recruitment'
 
 const API_BASE = '/api'
 
@@ -27,6 +35,7 @@ export async function fetchRequirementSubmissions(requirementId: number): Promis
 }
 
 export async function searchCandidates(params: {
+  requirementId?: number
   query?: string
   skill?: string
   location?: string
@@ -34,11 +43,12 @@ export async function searchCandidates(params: {
   experienceMax?: number
 }): Promise<{ candidates: Candidate[] }> {
   const searchParams = new URLSearchParams()
+  if (params.requirementId !== undefined) searchParams.set('requirementId', String(params.requirementId))
   if (params.query) searchParams.set('query', params.query)
   if (params.skill) searchParams.set('skill', params.skill)
   if (params.location) searchParams.set('location', params.location)
-  if (params.experienceMin) searchParams.set('experienceMin', String(params.experienceMin))
-  if (params.experienceMax) searchParams.set('experienceMax', String(params.experienceMax))
+  if (params.experienceMin !== undefined) searchParams.set('experienceMin', String(params.experienceMin))
+  if (params.experienceMax !== undefined) searchParams.set('experienceMax', String(params.experienceMax))
 
   const res = await fetch(`${API_BASE}/recruiter/candidates?${searchParams.toString()}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -47,10 +57,23 @@ export async function searchCandidates(params: {
   return handleResponse(res)
 }
 
+export async function fetchRecruiterCandidateDetails(
+  candidateId: number,
+  requirementId?: number,
+): Promise<RecruiterCandidateDetails> {
+  const searchParams = new URLSearchParams()
+  if (requirementId !== undefined) searchParams.set('requirementId', String(requirementId))
+  const suffix = searchParams.size ? `?${searchParams.toString()}` : ''
+  const res = await fetch(`${API_BASE}/recruiter/candidates/${candidateId}${suffix}`, {
+    credentials: 'include',
+  })
+  return handleResponse(res)
+}
+
 export async function submitCandidateToRequirement(payload: {
   candidateId: number
   requirementId: number
-  screeningNotes?: string
+  consentConfirmed: boolean
 }): Promise<{ applicationId: number; message: string }> {
   const res = await fetch(`${API_BASE}/recruiter/submissions`, {
     method: 'POST',
@@ -61,7 +84,55 @@ export async function submitCandidateToRequirement(payload: {
   return handleResponse(res)
 }
 
-export async function createResumeShare(applicationId: number): Promise<{ shareId: number; accessToken: string; message: string }> {
+export async function fetchRecruiterApplications(search?: string): Promise<{ applications: RecruiterApplication[] }> {
+  const searchParams = new URLSearchParams()
+  if (search?.trim()) searchParams.set('search', search.trim())
+  const res = await fetch(`${API_BASE}/recruiter/applications?${searchParams.toString()}`, {
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+  })
+  return handleResponse(res)
+}
+
+export async function updateRecruiterApplicationStatus(
+  applicationId: number,
+  status: string,
+  reason?: string,
+): Promise<{ message: string; status: string }> {
+  const res = await fetch(`${API_BASE}/recruiter/applications/${applicationId}/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ status, reason }),
+  })
+  return handleResponse(res)
+}
+
+export async function fetchRecruiterInterviews(): Promise<{ interviews: RecruiterInterview[] }> {
+  const res = await fetch(`${API_BASE}/recruiter/interviews`, {
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+  })
+  return handleResponse(res)
+}
+
+export async function scheduleRecruiterInterview(payload: {
+  applicationId: number
+  interviewType: 'PHONE' | 'VIDEO' | 'IN_PERSON'
+  scheduledStart: string
+  scheduledEnd: string
+  locationOrLink: string
+}): Promise<{ interviewId: number; message: string }> {
+  const res = await fetch(`${API_BASE}/recruiter/interviews`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  })
+  return handleResponse(res)
+}
+
+export async function createResumeShare(applicationId: number): Promise<{ shareId: number; message: string }> {
   const res = await fetch(`${API_BASE}/recruiter/resume-shares`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

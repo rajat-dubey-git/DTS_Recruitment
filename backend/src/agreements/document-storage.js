@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { createReadStream, createWriteStream } from 'node:fs'
-import { mkdir, open, rename, rm, stat } from 'node:fs/promises'
+import { constants, createReadStream, createWriteStream } from 'node:fs'
+import { copyFile, mkdir, open, rename, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -19,11 +19,15 @@ export function getPrivateStorageRoot() {
 
   const root = path.resolve(configuredPath)
   const relativeToRepository = path.relative(repositoryRoot, root)
+  const isInsideRepository = relativeToRepository !== ''
+    && relativeToRepository !== '..'
+    && !relativeToRepository.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relativeToRepository)
   if (
     relativeToRepository === '' ||
-    (!relativeToRepository.startsWith('..') && !path.isAbsolute(relativeToRepository))
+    (isInsideRepository && path.basename(root).toLowerCase() !== 'dts_private_storage')
   ) {
-    throw storageError('Private document storage must be outside the application repository.')
+    throw storageError('Private document storage inside the application repository must use the DTS_Private_Storage folder.')
   }
 
   return root
@@ -118,4 +122,21 @@ export async function createDraftPdf(agreementId, versionNumber, buildDocument) 
 export async function removePrivateFile(filePath) {
   if (!filePath) return
   await rm(filePath, { force: true })
+}
+
+export async function archiveDownloadCopy(absolutePath, fileName, audience) {
+  if (!absolutePath || !fileName) throw storageError('Download archive source is invalid.')
+  const folder = audience === 'customer' ? 'Customer_Downloads' : 'Admin_Downloads'
+  const directory = await ensurePrivateStorageDirectory(folder)
+  const safeName = String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_')
+  const extension = path.extname(safeName)
+  const baseName = path.basename(safeName, extension)
+  const uniqueName = `${baseName}-${randomUUID()}${extension}`
+  const destination = path.join(directory, uniqueName)
+  await copyFile(absolutePath, destination, constants.COPYFILE_EXCL)
+  return {
+    storageKey: path.join(folder, uniqueName),
+    absolutePath: destination,
+    ...(await fileMetadata(destination)),
+  }
 }

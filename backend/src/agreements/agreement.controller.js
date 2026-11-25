@@ -14,6 +14,7 @@ import {
   saveAdminAgreementTerms,
   uploadSignedAgreement,
 } from './agreement.service.js'
+import { archiveDownloadCopy } from './document-storage.js'
 
 export async function readAdminCatalog(_req, res, next) {
   try {
@@ -114,9 +115,10 @@ export async function activateAdminAgreement(req, res, next) {
   }
 }
 
-function sendDocument(res, next, getDocument) {
+function sendDocument(res, next, getDocument, audience) {
   return getDocument()
-    .then(({ absolutePath, fileName }) => {
+    .then(async ({ absolutePath, fileName }) => {
+      await archiveDownloadCopy(absolutePath, fileName, audience)
       res.download(absolutePath, fileName, (error) => {
         if (error) next(error)
       })
@@ -130,7 +132,7 @@ export function downloadCustomerDraft(req, res, next) {
     req.params.versionId,
     'draft',
     req.authUser,
-  ))
+  ), 'customer')
 }
 
 export function downloadCustomerSignedCopy(req, res, next) {
@@ -139,14 +141,23 @@ export function downloadCustomerSignedCopy(req, res, next) {
     req.params.versionId,
     'signed',
     req.authUser,
-  ))
+  ), 'customer')
 }
 
 export function downloadAdminSignedCopy(req, res, next) {
   return sendDocument(res, next, () => getPendingSignedDocument(
     req.params.agreementId,
     req.params.versionId,
-  ))
+  ), 'admin')
+}
+
+export function downloadAdminAgreement(req, res, next) {
+  return sendDocument(res, next, () => getAgreementDocument(
+    req.params.agreementId,
+    req.params.versionId,
+    'draft',
+    { role: 'ADMIN', user_id: 0 },
+  ), 'admin')
 }
 
 export async function uploadCustomerSignedCopy(req, res, next) {

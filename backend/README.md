@@ -139,6 +139,8 @@ Admin endpoints (all require an active ADMIN session):
 - `GET /api/admin/service-orders`
 - `GET /api/admin/requirements`
 - `GET /api/admin/requirements/options`
+- `GET /api/admin/requirements/:requirementId/assignment-options`
+- `POST /api/admin/requirements/:requirementId/assign`
 - `POST /api/admin/requirements`
 - `GET /api/admin/requirement-intakes`
 - `POST /api/admin/customers/:customerId/requirement-intakes`
@@ -149,6 +151,37 @@ Admin endpoints (all require an active ADMIN session):
 - `GET /api/public/requirement-intakes/:token` and `POST` (public, rate-limited, expiring one-time form)
 
 Allowlisted create endpoints are available for customers, skills, service types, job profiles, agreements, rate cards and service orders. Admins can create requirements only against an approved/in-progress service order and active job profile; they start at `PENDING_APPROVAL`. List endpoints accept `limit`, `offset` and `search`. Responses contain only fields needed by these modules. Arbitrary database-table read/write endpoints were removed.
+
+Recruiter endpoints (require an active RECRUITER or ADMIN session):
+
+- `GET /api/recruiter/requirements`
+- `GET /api/recruiter/requirements/:requirementId/submissions`
+- `GET /api/recruiter/candidates?requirementId=...` and `GET /api/recruiter/candidates/:candidateId?requirementId=...` (require an assigned requirement for recruiters)
+- `GET /api/recruiter/candidates/:candidateId/resume` (requires an authorized assignment and a verified, clean resume)
+- `POST /api/recruiter/submissions` (requires explicit candidate-consent confirmation)
+- `GET /api/recruiter/applications`
+- `PATCH /api/recruiter/applications/:applicationId/status`
+- `GET /api/recruiter/interviews`
+- `POST /api/recruiter/interviews`
+- `POST /api/recruiter/resume-shares`
+
+Candidate endpoints (require an active CANDIDATE session):
+
+- `GET /api/candidate/dashboard`
+- `GET` and `PUT /api/candidate/profile`
+- `GET` and `PUT /api/candidate/skills`
+- `PUT /api/candidate/education` and `PUT /api/candidate/experience`
+- `GET /api/candidate/requirements` and `POST /api/candidate/requirements/:requirementId/apply`
+- `GET /api/candidate/applications`, `GET /api/candidate/applications/:applicationId/timeline`, and `POST /api/candidate/applications/:applicationId/withdraw`
+- `GET` and `POST /api/candidate/resume`, plus `GET /api/candidate/resume/download`
+
+Admin candidate review endpoints (require an active ADMIN session):
+
+- `GET /api/admin/candidates` and `GET /api/admin/candidates/:candidateId`
+- `GET /api/admin/candidates/:candidateId/documents/:documentId/download`
+- `PATCH /api/admin/candidates/:candidateId/documents/:documentId/review`
+
+Candidate resume files are stored under the configured private storage root. Uploads remain pending until an administrator attests to external verification and malware scanning; the application does not scan uploaded files. Recruiters and customers can only access documents after verification/clean status and the required candidate consent/share checks.
 
 ## Development Rules
 

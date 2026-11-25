@@ -389,7 +389,58 @@ function listOptions(req) {
   return { limit, offset, search: search.trim(), status: typeof status === 'string' ? status.trim() : '' }
 }
 
-async function listPage(req, res, next, { columns, from, where = '1 = 1', searchColumns, statusColumn, orderBy }) {
+function parseColumnFilters(req, filterColumns) {
+  const raw = req.query.filters
+  if (!raw || !filterColumns || filterColumns.length === 0) {
+    return { sql: '', values: [] }
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw badRequest('filters must be a JSON object.')
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw badRequest('filters must be a JSON object.')
+  }
+  const allowed = new Set(filterColumns.map((column) => column.column))
+  const conditions = []
+  const values = []
+  for (const [column, value] of Object.entries(parsed)) {
+    if (!allowed.has(column)) continue
+    if (value === undefined || value === null || value === '') continue
+    if (typeof value === 'object' && value.like !== undefined) {
+      conditions.push(`${column} LIKE ?`)
+      values.push(`%${String(value.like)}%`)
+    } else if (
+      typeof value === 'object' &&
+      value !== null &&
+      (value.from !== undefined || value.to !== undefined)
+    ) {
+      if (value.from !== undefined && value.to !== undefined) {
+        conditions.push(`${column} BETWEEN ? AND ?`)
+        values.push(value.from, value.to)
+      } else if (value.from !== undefined) {
+        conditions.push(`${column} >= ?`)
+        values.push(value.from)
+      } else {
+        conditions.push(`${column} <= ?`)
+        values.push(value.to)
+      }
+    } else {
+      conditions.push(`${column} = ?`)
+      values.push(value)
+    }
+  }
+  return {
+    sql: conditions.length ? ` AND (${conditions.join(' AND ')})` : '',
+    values,
+  }
+}
+
+async function listPage(req, res, next, {
+  columns, from, where = '1 = 1', searchColumns, statusColumn, orderBy, filterColumns,
+}) {
   try {
     const { limit, offset, search, status } = listOptions(req)
     const values = []
@@ -399,6 +450,10 @@ async function listPage(req, res, next, { columns, from, where = '1 = 1', search
       filter += ` AND (${searchColumns.map((column) => `${column} LIKE ?`).join(' OR ')})`
       values.push(...searchColumns.map(() => `%${search}%`))
     }
+
+    const columnFilter = parseColumnFilters(req, filterColumns)
+    filter += columnFilter.sql
+    values.push(...columnFilter.values)
 
     if (status && status !== 'ALL' && statusColumn) {
       filter += ` AND ${statusColumn} = ?`
@@ -417,12 +472,24 @@ async function listPage(req, res, next, { columns, from, where = '1 = 1', search
       `SELECT COUNT(*) AS total FROM ${from} WHERE ${filter}`,
       values,
     )
+    const filterOptions = {}
+    for (const column of filterColumns ?? []) {
+      if (column.type !== 'enum') continue
+      const [options] = await pool.execute(
+        `SELECT DISTINCT ${column.column} AS value
+         FROM ${from}
+         WHERE (${where}) AND ${column.column} IS NOT NULL
+         ORDER BY ${column.column}`,
+      )
+      filterOptions[column.column] = options.map((option) => option.value)
+    }
 
     return res.json({
       rows,
       total: Number(counts[0].total),
       limit,
       offset,
+      filterOptions,
     })
   } catch (error) {
     return next(error)
@@ -455,6 +522,13 @@ export function listCustomers(req, res, next) {
     from: 'customers',
     searchColumns: ['customer_code', 'company_name', 'industry'],
     statusColumn: 'status',
+    filterColumns: [
+      { column: 'customer_code', type: 'text' },
+      { column: 'company_name', type: 'text' },
+      { column: 'industry', type: 'text' },
+      { column: 'status', type: 'enum' },
+      { column: 'payment_terms_days', type: 'numeric' },
+    ],
     orderBy: 'company_name, customer_id',
   })
 }
@@ -466,6 +540,9 @@ export function listCustomerAddresses(req, res, next) {
     from: `customer_addresses ca
       INNER JOIN customers c ON c.customer_id = ca.customer_id`,
     searchColumns: ['c.company_name', 'ca.city', 'ca.state', 'ca.postal_code'],
+    filterColumns: [
+      { column: 'ca.address_type', type: 'enum' },
+    ],
     orderBy: 'c.company_name, ca.address_type, ca.address_id',
   })
 }
@@ -479,6 +556,14 @@ export function listCustomerContacts(req, res, next) {
       INNER JOIN users u ON u.user_id = cc.user_id`,
     searchColumns: ['c.company_name', 'u.full_name', 'u.email', 'cc.designation'],
     statusColumn: 'cc.status',
+    filterColumns: [
+      { column: 'c.company_name', type: 'text' },
+      { column: 'u.full_name', type: 'text' },
+      { column: 'u.email', type: 'text' },
+      { column: 'cc.designation', type: 'text' },
+      { column: 'cc.contact_type', type: 'enum' },
+      { column: 'cc.status', type: 'enum' },
+    ],
     orderBy: 'c.company_name, u.full_name, cc.contact_id',
   })
 }
@@ -490,6 +575,11 @@ export function listRecruiters(req, res, next) {
     where: "role = 'RECRUITER'",
     searchColumns: ['full_name', 'email'],
     statusColumn: 'status',
+    filterColumns: [
+      { column: 'full_name', type: 'text' },
+      { column: 'email', type: 'text' },
+      { column: 'status', type: 'enum' },
+    ],
     orderBy: 'full_name, user_id',
   })
 }
@@ -507,6 +597,14 @@ export function listUsers(req, res, next) {
     from: 'users u',
     searchColumns: ['u.full_name', 'u.email', 'u.mobile', 'u.role', 'u.status'],
     statusColumn: 'u.status',
+    filterColumns: [
+      { column: 'u.full_name', type: 'text' },
+      { column: 'u.email', type: 'text' },
+      { column: 'u.mobile', type: 'text' },
+      { column: 'u.role', type: 'enum' },
+      { column: 'u.status', type: 'enum' },
+      { column: 'customer_company', type: 'text' },
+    ],
     orderBy: 'u.full_name, u.user_id',
   })
 }
@@ -516,6 +614,10 @@ export function listSkills(req, res, next) {
     columns: 'skill_id, skill_name, skill_category',
     from: 'skills',
     searchColumns: ['skill_name', 'skill_category'],
+    filterColumns: [
+      { column: 'skill_name', type: 'text' },
+      { column: 'skill_category', type: 'text' },
+    ],
     orderBy: 'skill_name, skill_id',
   })
 }
@@ -525,6 +627,11 @@ export function listServiceTypes(req, res, next) {
     columns: 'service_type_id, service_code, service_name, employment_model',
     from: 'service_types',
     searchColumns: ['service_code', 'service_name', 'employment_model'],
+    filterColumns: [
+      { column: 'service_code', type: 'text' },
+      { column: 'service_name', type: 'text' },
+      { column: 'employment_model', type: 'enum' },
+    ],
     orderBy: 'service_name, service_type_id',
   })
 }
@@ -536,6 +643,14 @@ export function listJobProfiles(req, res, next) {
     from: 'job_profiles',
     searchColumns: ['profile_code', 'profile_name', 'category'],
     statusColumn: 'status',
+    filterColumns: [
+      { column: 'profile_code', type: 'text' },
+      { column: 'profile_name', type: 'text' },
+      { column: 'category', type: 'text' },
+      { column: 'status', type: 'enum' },
+      { column: 'default_experience_min', type: 'numeric' },
+      { column: 'default_experience_max', type: 'numeric' },
+    ],
     orderBy: 'profile_name, job_profile_id',
   })
 }
@@ -548,6 +663,14 @@ export function listAgreements(req, res, next) {
       INNER JOIN customers c ON c.customer_id = a.customer_id`,
     searchColumns: ['a.agreement_number', 'c.company_name', 'a.title', 'a.status'],
     statusColumn: 'a.status',
+    filterColumns: [
+      { column: 'a.agreement_number', type: 'text' },
+      { column: 'c.company_name', type: 'text' },
+      { column: 'a.title', type: 'text' },
+      { column: 'a.status', type: 'enum' },
+      { column: 'a.effective_date', type: 'date' },
+      { column: 'a.expiry_date', type: 'date' },
+    ],
     orderBy: 'a.created_at DESC, a.agreement_id DESC',
   })
 }
@@ -563,6 +686,18 @@ export function listRateCards(req, res, next) {
       INNER JOIN service_types st ON st.service_type_id = rc.service_type_id
       INNER JOIN job_profiles jp ON jp.job_profile_id = rc.job_profile_id`,
     searchColumns: ['a.agreement_number', 'c.company_name', 'st.service_name', 'jp.profile_name'],
+    filterColumns: [
+      { column: 'a.agreement_number', type: 'text' },
+      { column: 'c.company_name', type: 'text' },
+      { column: 'st.service_name', type: 'text' },
+      { column: 'jp.profile_name', type: 'text' },
+      { column: 'rc.fee_type', type: 'enum' },
+      { column: 'rc.fee_basis', type: 'enum' },
+      { column: 'rc.billing_frequency', type: 'enum' },
+      { column: 'rc.fee_value', type: 'numeric' },
+      { column: 'rc.effective_from', type: 'date' },
+      { column: 'rc.effective_to', type: 'date' },
+    ],
     orderBy: 'a.agreement_number, rc.effective_from DESC, rc.rate_card_id DESC',
   })
 }
@@ -577,6 +712,16 @@ export function listServiceOrders(req, res, next) {
       INNER JOIN service_types st ON st.service_type_id = so.service_type_id`,
     searchColumns: ['so.order_number', 'a.agreement_number', 'c.company_name', 'st.service_name', 'so.title'],
     statusColumn: 'so.status',
+    filterColumns: [
+      { column: 'so.order_number', type: 'text' },
+      { column: 'a.agreement_number', type: 'text' },
+      { column: 'c.company_name', type: 'text' },
+      { column: 'st.service_name', type: 'text' },
+      { column: 'so.title', type: 'text' },
+      { column: 'so.status', type: 'enum' },
+      { column: 'so.start_date', type: 'date' },
+      { column: 'so.end_date', type: 'date' },
+    ],
     orderBy: 'so.created_at DESC, so.service_order_id DESC',
   })
 }
@@ -584,7 +729,12 @@ export function listServiceOrders(req, res, next) {
 export function listRequirements(req, res, next) {
   return listPage(req, res, next, {
     columns: `r.requirement_id, r.requirement_number, c.company_name,
-      r.job_title, jp.profile_name, r.headcount, r.work_mode, r.status, r.created_at`,
+      r.job_title, jp.profile_name, r.headcount, r.work_mode, r.status, r.created_at,
+      (SELECT GROUP_CONCAT(DISTINCT assigned_user.full_name ORDER BY assigned_user.full_name SEPARATOR ', ')
+       FROM requirement_assignments assigned
+       INNER JOIN users assigned_user ON assigned_user.user_id = assigned.recruiter_id
+       WHERE assigned.requirement_id = r.requirement_id AND assigned.unassigned_at IS NULL
+      ) AS assigned_recruiters`,
     from: `job_requirements r
       INNER JOIN service_orders so ON so.service_order_id = r.service_order_id
       INNER JOIN agreements a ON a.agreement_id = so.agreement_id
@@ -592,8 +742,126 @@ export function listRequirements(req, res, next) {
       INNER JOIN job_profiles jp ON jp.job_profile_id = r.job_profile_id`,
     searchColumns: ['r.requirement_number', 'c.company_name', 'r.job_title', 'jp.profile_name'],
     statusColumn: 'r.status',
+    filterColumns: [
+      { column: 'r.requirement_number', type: 'text' },
+      { column: 'c.company_name', type: 'text' },
+      { column: 'r.job_title', type: 'text' },
+      { column: 'jp.profile_name', type: 'text' },
+      { column: 'r.headcount', type: 'numeric' },
+      { column: 'r.work_mode', type: 'enum' },
+      { column: 'r.status', type: 'enum' },
+    ],
     orderBy: 'r.created_at DESC, r.requirement_id DESC',
   })
+}
+
+export async function getRequirementAssignmentOptions(req, res, next) {
+  try {
+    const requirementId = positiveId(req.params.requirementId, 'requirement')
+    const [requirements] = await pool.execute(
+      'SELECT requirement_id, job_title, status FROM job_requirements WHERE requirement_id = ?',
+      [requirementId],
+    )
+    if (!requirements[0]) {
+      return res.status(404).json({ message: 'Requirement not found.' })
+    }
+
+    const [recruiters] = await pool.execute(
+      `SELECT user_id, full_name, email
+       FROM users
+       WHERE role = 'RECRUITER' AND status = 'ACTIVE'
+       ORDER BY full_name, user_id`,
+    )
+    const [assignments] = await pool.execute(
+      `SELECT ra.recruiter_id, ra.assignment_role, u.full_name, u.email
+       FROM requirement_assignments ra
+       INNER JOIN users u ON u.user_id = ra.recruiter_id
+       WHERE ra.requirement_id = ? AND ra.unassigned_at IS NULL
+       ORDER BY ra.assignment_role, u.full_name`,
+      [requirementId],
+    )
+    return res.json({ requirement: requirements[0], recruiters, assignments })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+export async function assignRequirementRecruiter(req, res, next) {
+  const connection = await pool.getConnection()
+  try {
+    const requirementId = positiveId(req.params.requirementId, 'requirement')
+    const recruiterId = positiveId(req.body?.recruiterId, 'recruiter')
+    const assignmentRole = req.body?.assignmentRole ?? 'LEAD'
+    if (!['LEAD', 'SUPPORT'].includes(assignmentRole)) {
+      throw badRequest('Assignment role must be LEAD or SUPPORT.')
+    }
+
+    await connection.beginTransaction()
+    const [requirements] = await connection.execute(
+      `SELECT requirement_id, status
+       FROM job_requirements
+       WHERE requirement_id = ?
+       FOR UPDATE`,
+      [requirementId],
+    )
+    if (!requirements[0]) {
+      throw Object.assign(new Error('Requirement not found.'), { statusCode: 404 })
+    }
+    if (!['APPROVED', 'OPEN'].includes(requirements[0].status)) {
+      throw Object.assign(new Error('Only approved or open requirements can be assigned.'), { statusCode: 409 })
+    }
+
+    const [recruiters] = await connection.execute(
+      `SELECT user_id
+       FROM users
+       WHERE user_id = ? AND role = 'RECRUITER' AND status = 'ACTIVE'
+       LIMIT 1`,
+      [recruiterId],
+    )
+    if (!recruiters[0]) {
+      throw Object.assign(new Error('Select an active recruiter account.'), { statusCode: 400 })
+    }
+
+    if (assignmentRole === 'LEAD') {
+      await connection.execute(
+        `UPDATE requirement_assignments
+         SET unassigned_at = CURRENT_TIMESTAMP
+         WHERE requirement_id = ? AND assignment_role = 'LEAD'
+           AND recruiter_id <> ? AND unassigned_at IS NULL`,
+        [requirementId, recruiterId],
+      )
+    }
+
+    const [existing] = await connection.execute(
+      `SELECT assignment_id
+       FROM requirement_assignments
+       WHERE requirement_id = ? AND recruiter_id = ? AND unassigned_at IS NULL
+       LIMIT 1
+       FOR UPDATE`,
+      [requirementId, recruiterId],
+    )
+    if (existing[0]) {
+      await connection.execute(
+        'UPDATE requirement_assignments SET assignment_role = ? WHERE assignment_id = ?',
+        [assignmentRole, existing[0].assignment_id],
+      )
+    } else {
+      await connection.execute(
+        `INSERT INTO requirement_assignments
+         (requirement_id, recruiter_id, assignment_role)
+         VALUES (?, ?, ?)`,
+        [requirementId, recruiterId, assignmentRole],
+      )
+    }
+
+    await connection.commit()
+    return res.json({ message: 'Recruiter assigned to requirement.' })
+  } catch (error) {
+    await connection.rollback()
+    return next(error)
+  } finally {
+    connection.release()
+  }
 }
 
 export async function getRequirementCreationOptions(_req, res, next) {
@@ -641,6 +909,16 @@ export async function listRequirementIntakes(req, res, next) {
     where: "i.status IN ('PENDING','SUBMITTED','CONVERTED','EXPIRED')",
     searchColumns: ['c.company_name', 'u.full_name', 'u.email', 'i.job_title'],
     statusColumn: 'i.status',
+    filterColumns: [
+      { column: 'c.company_name', type: 'text' },
+      { column: 'u.full_name', type: 'text' },
+      { column: 'u.email', type: 'text' },
+      { column: 'i.job_title', type: 'text' },
+      { column: 'i.headcount', type: 'numeric' },
+      { column: 'i.work_mode', type: 'enum' },
+      { column: 'i.employment_schedule', type: 'enum' },
+      { column: 'i.status', type: 'enum' },
+    ],
     orderBy: 'i.created_at DESC, i.intake_id DESC',
   })
 }

@@ -204,6 +204,7 @@ export async function createCustomerAgreement(user, input) {
   }
   const lines = normalizedLines(input.serviceLines)
   const connection = await pool.getConnection()
+  let draft
   try {
     await connection.beginTransaction()
     if (!await customerHasAccess(user.user_id, customerId, connection)) {
@@ -240,6 +241,21 @@ export async function createCustomerAgreement(user, input) {
     for (const line of validatedLines) {
       await insertServiceLine(connection, versionId, line)
     }
+    const agreement = await getCurrentVersionForUpdate(connection, agreementId, versionId)
+    const documentLines = await getServiceLines(connection, versionId)
+    draft = await createDraftPdf(agreementId, 1, () => (
+      buildDraftDocument(agreement, { version_number: 1 }, documentLines)
+    ))
+    await connection.execute(
+      `UPDATE agreement_versions
+       SET draft_document_path = ?, draft_sha256 = ?
+       WHERE agreement_version_id = ?`,
+      [draft.storageKey, draft.sha256, versionId],
+    )
+    await connection.execute(
+      'UPDATE agreements SET document_path = ? WHERE agreement_id = ?',
+      [draft.storageKey, agreementId],
+    )
     await connection.execute(
       `INSERT INTO agreement_events
         (agreement_id, agreement_version_id, action_code, new_status, actor_user_id, customer_visible_comment)
@@ -250,6 +266,7 @@ export async function createCustomerAgreement(user, input) {
     return getCustomerAgreementDetail(user.user_id, agreementId)
   } catch (error) {
     await connection.rollback()
+    await removePrivateFile(draft?.absolutePath)
     throw error
   } finally {
     connection.release()

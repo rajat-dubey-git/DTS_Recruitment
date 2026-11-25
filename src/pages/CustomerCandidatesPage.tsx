@@ -174,15 +174,6 @@ export default function CustomerCandidatesPage() {
                     <p className="font-medium text-slate-700 truncate">{cand.primary_skills}</p>
                   </div>
 
-                  {cand.screening_notes && (
-                    <div className="bg-slate-50 p-2.5 rounded border border-slate-100">
-                      <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">
-                        Recruiter Assessment
-                      </span>
-                      <p className="text-slate-600 italic text-[11px] mt-0.5">"{cand.screening_notes}"</p>
-                    </div>
-                  )}
-
                   {/* Customer current decision status */}
                   {cand.customer_decision && (
                     <div className="pt-2 border-t border-slate-100">
@@ -222,6 +213,7 @@ export default function CustomerCandidatesPage() {
 
                   <div className="grid grid-cols-3 gap-2">
                     <button
+                      disabled={isExpired || loading}
                       onClick={() =>
                         setDecisionModal({
                           shareId: cand.share_id,
@@ -229,12 +221,13 @@ export default function CustomerCandidatesPage() {
                           action: 'SHORTLIST',
                         })
                       }
-                      className="py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition inline-flex items-center justify-center gap-1"
+                      className="py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition inline-flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <CheckCircle2 className="w-3 h-3" />
                       Shortlist
                     </button>
                     <button
+                      disabled={isExpired || loading}
                       onClick={() =>
                         setDecisionModal({
                           shareId: cand.share_id,
@@ -242,12 +235,13 @@ export default function CustomerCandidatesPage() {
                           action: 'HOLD',
                         })
                       }
-                      className="py-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition inline-flex items-center justify-center gap-1"
+                      className="py-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition inline-flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <PauseCircle className="w-3 h-3" />
                       Hold
                     </button>
                     <button
+                      disabled={isExpired || loading}
                       onClick={() =>
                         setDecisionModal({
                           shareId: cand.share_id,
@@ -255,7 +249,7 @@ export default function CustomerCandidatesPage() {
                           action: 'REJECT',
                         })
                       }
-                      className="py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition inline-flex items-center justify-center gap-1"
+                      className="py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition inline-flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <XCircle className="w-3 h-3" />
                       Reject

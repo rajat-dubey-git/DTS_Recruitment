@@ -36,7 +36,7 @@ export const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({
                 Resume: {candidateName}
                 <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800">
                   <ShieldCheck className="w-3.5 h-3.5 mr-1" />
-                  Verified & Watermarked
+                  Secure 24-hour share
                 </span>
               </h2>
               {expiresAt && (

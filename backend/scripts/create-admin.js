@@ -18,8 +18,15 @@ async function createAdmin() {
     throw new Error('Set DB_PASSWORD in backend/.env (use an empty value only if the MySQL account has no password).')
   }
 
-  if (!password || Buffer.byteLength(password, 'utf8') < 12) {
-    throw new Error('ADMIN_INITIAL_PASSWORD must contain at least 12 characters.')
+  if (
+    !password ||
+    password.length < 8 ||
+    !/[A-Z]/.test(password) ||
+    !/[a-z]/.test(password) ||
+    !/[0-9]/.test(password) ||
+    !/[^A-Za-z0-9]/.test(password)
+  ) {
+    throw new Error('ADMIN_INITIAL_PASSWORD must be at least 8 characters and include uppercase, lowercase, number and special character.')
   }
 
   if (Buffer.byteLength(password, 'utf8') > 72) {

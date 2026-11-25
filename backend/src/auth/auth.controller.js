@@ -80,6 +80,13 @@ export function logout(_req, res) {
   return res.json({ message: 'Signed out.' })
 }
 
-export async function me(req, res) {
-  return res.json({ user: toUser(req.authUser) })
+export async function me(req, res, next) {
+  try {
+    if (!req.authUser) {
+      return res.status(401).json({ message: 'Not authenticated.' })
+    }
+    return res.json({ user: toUser(req.authUser) })
+  } catch (error) {
+    return next(error)
+  }
 }

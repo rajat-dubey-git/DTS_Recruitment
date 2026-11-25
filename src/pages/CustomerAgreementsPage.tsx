@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { Download, FileCheck2, FileText, Plus, Send, Trash2, Upload } from 'lucide-react'
+import { CheckCircle, Download, FileCheck2, FileText, Info, Plus, Send, Trash2, Upload } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { workspaceApi } from '../api/workspace'
 import type {
   AgreementCatalog,
@@ -9,6 +11,7 @@ import type {
   AgreementServiceLineInput,
 } from '../api/workspace'
 import AgreementSampleTemplateModal from '../components/AgreementSampleTemplateModal'
+import { v4 as uuidv4 } from 'uuid'
 
 type DraftLine = {
   serviceTypeId: string
@@ -49,7 +52,7 @@ function downloadBlob(blob: Blob, fileName: string) {
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()
-  URL.revokeObjectURL(url)
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 function AgreementDetailPanel({
@@ -96,6 +99,20 @@ function AgreementDetailPanel({
     } finally {
       setBusy(false)
     }
+  }
+
+  const downloadReference = () => {
+    if (!detail?.version) return
+    const kind = detail.version.canDownloadSignedCopy
+      ? 'signed'
+      : detail.version.canDownloadDraft
+        ? 'draft'
+        : null
+    if (!kind) {
+      setError('No agreement PDF is available for download yet.')
+      return
+    }
+    void download(kind)
   }
 
   const upload = async (event: FormEvent<HTMLFormElement>) => {
@@ -160,7 +177,7 @@ function AgreementDetailPanel({
       <div className="agreement-detail-heading">
         <div>
           <div className="eyebrow">AGREEMENT DETAILS</div>
-          <h2>{loading ? 'Loading agreement…' : detail?.agreement.agreementNumber}</h2>
+          <h2>{loading ? 'Loading agreementâ€¦' : detail?.agreement.agreementNumber}</h2>
         </div>
         {detail?.version && <span className="agreement-status">{statusLabel(detail.version.status)}</span>}
       </div>
@@ -177,9 +194,9 @@ function AgreementDetailPanel({
             {detail.serviceLines.map((line) => (
               <article className="agreement-line-card" key={line.agreement_service_line_id}>
                 <div>
-                  <strong>{line.service_name} · {line.profile_name}</strong>
-                  <p>{line.employment_schedule.replace(/_/g, ' ')} · {line.headcount} position(s)
-                    {line.hours_per_week ? ` · ${line.hours_per_week} hours/week` : ''}
+                  <strong>{line.service_name} Â· {line.profile_name}</strong>
+                  <p>{line.employment_schedule.replace(/_/g, ' ')} Â· {line.headcount} position(s)
+                    {line.hours_per_week ? ` Â· ${line.hours_per_week} hours/week` : ''}
                   </p>
                   <small>{feeDescription(line.employment_model, Number(line.fee_value))}</small>
                   {line.scope_description && <p>{line.scope_description}</p>}
@@ -189,6 +206,13 @@ function AgreementDetailPanel({
             {detail.serviceLines.length === 0 && <p>No service lines are available for this agreement.</p>}
           </div>
 
+          {detail.version?.canDownloadDraft || detail.version?.canDownloadSignedCopy ? (
+            <button type="button" className="btn btn-outline" onClick={downloadReference} disabled={busy}>
+              <Download size={15} /> Agreement PDF
+            </button>
+          ) : (
+            <span className="agreement-status" title="The agreement PDF is not ready yet">PDF pending</span>
+          )}
           {detail.version?.canDownloadDraft && (
             <button type="button" className="btn btn-outline" onClick={() => void download('draft')} disabled={busy}>
               <Download size={15} /> Download draft PDF
@@ -206,7 +230,7 @@ function AgreementDetailPanel({
                 <label htmlFor="signedPdf">Signed agreement PDF (maximum 50 MB)</label>
                 <input id="signedPdf" name="signedPdf" type="file" accept=".pdf,application/pdf" required />
                 <button type="submit" className="btn btn-primary" disabled={busy}>
-                  <Upload size={15} /> {busy ? 'Uploading…' : 'Upload signed PDF'}
+                  <Upload size={15} /> {busy ? 'Uploadingâ€¦' : 'Upload signed PDF'}
                 </button>
               </form>
               <form className="agreement-change-form" onSubmit={(event) => void requestChanges(event)}>
@@ -224,6 +248,37 @@ function AgreementDetailPanel({
                 </button>
               </form>
             </>
+          )}
+
+          {detail.version?.status === 'SIGNED_PENDING_ADMIN_ACTIVATION' && (
+            <p className="agreement-waiting">
+              <Info size={14} /> Signed agreement received. Waiting for the administrator to verify and activate it.
+            </p>
+          )}
+
+          {detail.version?.status === 'ACTIVE' && (
+            <div className="agreement-active-state">
+              <p className="agreement-active-text">
+                <CheckCircle size={14} /> This agreement is active and ready for service orders.
+              </p>
+              <details>
+                <summary>Agreement details</summary>
+                <table className="agreement-details-table">
+                  <thead>
+                    <tr><th>Field</th><th>Value</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr><td>Agreement number</td><td>{detail.agreement.agreementNumber}</td></tr>
+                    <tr><td>Customer</td><td>{detail.agreement.companyName}</td></tr>
+                    <tr><td>Status</td><td>{statusLabel(detail.version.status)}</td></tr>
+                    <tr><td>Effective date</td><td>{detail.agreement.effectiveDate ?? 'Not set'}</td></tr>
+                    <tr><td>Expiry date</td><td>{detail.agreement.expiryDate ?? 'Not set'}</td></tr>
+                    <tr><td>Signed date</td><td>{detail.agreement.signedDate ?? 'Not set'}</td></tr>
+                    <tr><td>Version</td><td>{detail.version.versionNumber}</td></tr>
+                  </tbody>
+                </table>
+              </details>
+            </div>
           )}
 
           <div className="agreement-event-list">
@@ -254,6 +309,8 @@ export default function CustomerAgreementsPage() {
   const [message, setMessage] = useState('')
   const [showSampleTemplate, setShowSampleTemplate] = useState(false)
   const requestKey = useRef<string | null>(null)
+  const [filter, setFilter] = useState('')
+  const [searchTerm, setSearchTerm] = useState('')
 
   const loadData = async () => {
     const [catalogResult, agreementRows] = await Promise.all([
@@ -333,6 +390,31 @@ export default function CustomerAgreementsPage() {
     })
   }
 
+  const downloadReferencePdf = async (agreement: AgreementListItem) => {
+    if (!agreement.agreement_version_id) return
+    const kind = agreement.has_signed_document
+      ? 'signed'
+      : agreement.has_draft_document
+        ? 'draft'
+        : null
+    if (!kind) {
+      setError('No agreement PDF is available for download yet.')
+      return
+    }
+    setError('')
+    try {
+      const blob = await workspaceApi.downloadAgreementDocument(
+        'customer',
+        agreement.agreement_id,
+        agreement.agreement_version_id,
+        kind,
+      )
+      downloadBlob(blob, `${agreement.agreement_number}-v${agreement.version_number}-${kind}.pdf`)
+    } catch (downloadError) {
+      setError(downloadError instanceof Error ? downloadError.message : 'Unable to download the agreement PDF.')
+    }
+  }
+
   const downloadListDocument = async (agreement: AgreementListItem, kind: 'draft' | 'signed') => {
     if (!agreement.agreement_version_id) return
     setError('')
@@ -348,6 +430,21 @@ export default function CustomerAgreementsPage() {
       setError(downloadError instanceof Error ? downloadError.message : 'Unable to download the PDF.')
     }
   }
+
+  const visibleAgreements = agreements.filter((agreement) => {
+    const status = agreement.version_status ?? agreement.status
+    const matchesStatus = !filter
+      || (filter === 'PENDING_SIGNATURE'
+        ? ['PENDING_SIGNATURE', 'PENDING_CUSTOMER_SIGNATURE'].includes(status)
+        : status === filter)
+    const query = searchTerm.trim().toLowerCase()
+    const matchesSearch = !query || [
+      agreement.agreement_number,
+      agreement.company_name,
+      agreement.title,
+    ].some((value) => value.toLowerCase().includes(query))
+    return matchesStatus && matchesSearch
+  })
 
   const addLine = () => setLines((current) => [...current, blankLine(catalog)])
   const removeLine = (index: number) => setLines((current) => current.filter((_, lineIndex) => lineIndex !== index))
@@ -372,7 +469,7 @@ export default function CustomerAgreementsPage() {
 
       {error && <div className="form-error" role="alert">{error}</div>}
       {message && <div className="agreement-success" role="status">{message}</div>}
-      {loading && <div className="panel database-message" role="status">Loading agreement workspace…</div>}
+      {loading && <div className="panel database-message" role="status">Loading agreement workspaceâ€¦</div>}
       {!loading && catalog?.customers.length === 0 && (
         <div className="panel database-message">Your account is not connected to a customer company. Contact the administrator.</div>
       )}
@@ -419,6 +516,7 @@ export default function CustomerAgreementsPage() {
                         <option key={option.service_type_id} value={option.service_type_id}>{option.service_name}</option>
                       ))}
                     </select>
+                    <small>Role not listed? <Link to="/app/job-profiles">Describe your own job title, skills and description</Link>.</small>
                   </label>
                   <label>
                     Job profile
@@ -492,7 +590,7 @@ export default function CustomerAgreementsPage() {
               <Plus size={15} /> Add another service
             </button>
             <button type="submit" className="btn btn-primary" disabled={submitting || !catalog.serviceTypes.length || !catalog.jobProfiles.length}>
-              <Send size={15} /> {submitting ? 'Submitting…' : 'Submit for admin review'}
+              <Send size={15} /> {submitting ? 'Submittingâ€¦' : 'Submit for admin review'}
             </button>
           </div>
           <p className="agreement-disclaimer">
@@ -506,21 +604,52 @@ export default function CustomerAgreementsPage() {
           <div>
             <h2>Your agreements</h2>
             <p>Only agreements for your customer company are shown.</p>
+<div className="agreement-filters">
+              <select
+                onChange={(e) => setFilter(e.target.value)}
+                value={filter}
+                className="agreement-filter-select"
+              >
+                <option value="">All</option>
+                <option value="ACTIVE">Active</option>
+                <option value="PENDING_SIGNATURE">Pending Signature</option>
+                <option value="SIGNED_PENDING_ADMIN_ACTIVATION">Signed Pending Admin</option>
+                <option value="DRAFT">Draft</option>
+              </select>
+              <input
+                type="text"
+                placeholder="Search agreement number..."
+                onChange={(e) => setSearchTerm(e.target.value)}
+                value={searchTerm}
+                className="agreement-filter-input"
+              />
+            </div>
           </div>
         </div>
-        {agreements.length === 0 && !loading && <div className="agreement-empty">No agreements yet.</div>}
-        {agreements.map((agreement) => (
+        {visibleAgreements.length === 0 && !loading && (
+          <div className="agreement-empty">
+            {agreements.length === 0 ? 'No agreements yet.' : 'No agreements match these filters.'}
+          </div>
+        )}
+        {visibleAgreements.map((agreement) => (
           <article className={`agreement-list-row ${selectedAgreementId === agreement.agreement_id ? 'selected' : ''}`} key={agreement.agreement_id}>
             <button type="button" className="agreement-row-main" onClick={() => setSelectedAgreementId(
               selectedAgreementId === agreement.agreement_id ? null : agreement.agreement_id,
             )}>
               <div>
                 <strong>{agreement.agreement_number}</strong>
-                <span>{agreement.company_name} · {agreement.title}</span>
+                <span>{agreement.company_name} Â· {agreement.title}</span>
               </div>
               <span className="agreement-status">{statusLabel(agreement.version_status ?? agreement.status)}</span>
             </button>
             <div className="agreement-row-actions">
+              {agreement.has_signed_document || agreement.has_draft_document ? (
+                <button type="button" className="btn btn-outline" onClick={() => void downloadReferencePdf(agreement)}>
+                  <Download size={14} /> Agreement PDF
+                </button>
+              ) : (
+                <span className="agreement-status" title="The agreement PDF is not ready yet">PDF pending</span>
+              )}
               {agreement.has_draft_document && agreement.agreement_version_id && (
                 <button type="button" className="btn btn-outline" onClick={() => void downloadListDocument(agreement, 'draft')}>
                   <Download size={14} /> Draft PDF

@@ -28,6 +28,7 @@ export type WorkspacePage = {
   total: number
   limit: number
   offset: number
+  filterOptions?: Record<string, Array<string | number>>
 }
 
 export type AdminModule =
@@ -248,6 +249,15 @@ export const workspaceApi = {
     }
   },
 
+  async listCustomerInvoices() {
+    try {
+      const response = await http.get<{ invoices: WorkspaceRecord[] }>('/customer/invoices')
+      return response.data.invoices
+    } catch (error) {
+      throw new Error(messageFrom(error, 'Unable to load customer invoices.'))
+    }
+  },
+
   async createCustomerAgreement(values: {
     customerId: number
     requestKey: string
@@ -381,9 +391,21 @@ export const workspaceApi = {
     }
   },
 
-  async list(module: AdminModule, params: { limit: number; offset: number; search: string; status?: string }) {
+  async list(module: AdminModule, params: {
+    limit: number
+    offset: number
+    search: string
+    status?: string
+    filterColumns?: Record<string, string | number | boolean | null>
+  }) {
     try {
-      const response = await http.get<WorkspacePage>(`/admin/${module}`, { params })
+      const { filterColumns, ...listParams } = params
+      const response = await http.get<WorkspacePage>(`/admin/${module}`, {
+        params: {
+          ...listParams,
+          ...(filterColumns ? { filters: JSON.stringify(filterColumns) } : {}),
+        },
+      })
       return response.data
     } catch (error) {
       throw new Error(messageFrom(error, `Unable to load ${module.replace('-', ' ')}.`))
@@ -468,6 +490,34 @@ export const workspaceApi = {
       return response.data
     } catch (error) {
       throw new Error(messageFrom(error, 'Unable to load requirement creation options.'))
+    }
+  },
+
+  async requirementAssignmentOptions(requirementId: number) {
+    try {
+      const response = await http.get<{
+        requirement: { requirement_id: number; job_title: string; status: string }
+        recruiters: Array<{ user_id: number; full_name: string; email: string }>
+        assignments: Array<{ recruiter_id: number; assignment_role: 'LEAD' | 'SUPPORT'; full_name: string; email: string }>
+      }>(`/admin/requirements/${requirementId}/assignment-options`)
+      return response.data
+    } catch (error) {
+      throw new Error(messageFrom(error, 'Unable to load recruiter assignment options.'))
+    }
+  },
+
+  async assignRequirementRecruiter(
+    requirementId: number,
+    values: { recruiterId: number; assignmentRole: 'LEAD' | 'SUPPORT' },
+  ) {
+    try {
+      const response = await http.post<{ message: string }>(
+        `/admin/requirements/${requirementId}/assign`,
+        values,
+      )
+      return response.data
+    } catch (error) {
+      throw new Error(messageFrom(error, 'Unable to assign this recruiter.'))
     }
   },
 

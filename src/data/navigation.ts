@@ -28,14 +28,16 @@ export const navByRole: Record<Role, NavItem[]> = {
     { label: 'Customer Contacts', icon: Users, path: '/app/admin/customer-contacts' },
     { label: 'Recruiters', icon: Users, path: '/app/admin/recruiters' },
     { label: 'Users', icon: Users, path: '/app/admin/users' },
+    { label: 'Requirements', icon: ClipboardList, path: '/app/admin/requirements' },
+    { label: 'Candidates', icon: Users, path: '/app/admin/candidates' },
     { label: 'Job Profiles', icon: BriefcaseBusiness, path: '/app/admin/job-profiles' },
     { label: 'Skills', icon: BriefcaseBusiness, path: '/app/admin/skills' },
     { label: 'Service Types', icon: ClipboardList, path: '/app/admin/service-types' },
     { label: 'Agreements', icon: FileText, path: '/app/admin/agreements' },
     { label: 'Rate Cards', icon: CreditCard, path: '/app/admin/rate-cards' },
     { label: 'Service Orders', icon: ClipboardList, path: '/app/admin/service-orders' },
-    { label: 'Requirements', icon: ClipboardList, path: '/app/admin/requirements' },
     { label: 'Customer Requests', icon: ClipboardList, path: '/app/admin/requirement-intakes' },
+    { label: 'Recruiting Operations', icon: Users, path: '/app/assigned-requirements' },
   ],
 
   CUSTOMER: [
@@ -51,12 +53,16 @@ export const navByRole: Record<Role, NavItem[]> = {
   RECRUITER: [
     { label: 'Overview', icon: LayoutDashboard, path: '/app/dashboard' },
     { label: 'Assigned Requirements', icon: ClipboardList, path: '/app/assigned-requirements' },
-    { label: 'Candidates', icon: Users, path: '/app/candidates' },
-    { label: 'Applications', icon: BriefcaseBusiness, path: '/app/applications' },
-    { label: 'Interviews', icon: CalendarDays, path: '/app/interviews' },
+    { label: 'Candidates', icon: Users, path: '/app/recruiter/candidates' },
+    { label: 'Applications', icon: BriefcaseBusiness, path: '/app/recruiter/applications' },
+    { label: 'Interviews', icon: CalendarDays, path: '/app/recruiter/interviews' },
   ],
 
   CANDIDATE: [
     { label: 'Overview', icon: LayoutDashboard, path: '/app/dashboard' },
+    { label: 'Profile', icon: Users, path: '/app/candidate/profile' },
+    { label: 'Resume', icon: FileText, path: '/app/candidate/resume' },
+    { label: 'Open Requirements', icon: ClipboardList, path: '/app/candidate/requirements' },
+    { label: 'Applications', icon: BriefcaseBusiness, path: '/app/candidate/applications' },
   ],
 }

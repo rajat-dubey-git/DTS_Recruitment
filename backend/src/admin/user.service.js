@@ -5,6 +5,38 @@ import { isEmailConfigured, sendInvitationEmail } from '../services/email.servic
 
 const ALLOWED_ROLES = new Set(['RECRUITER', 'CUSTOMER', 'CANDIDATE'])
 
+const PASSWORD_REGEX = {
+  minLength: 8,
+  upper: /[A-Z]/,
+  lower: /[a-z]/,
+  digit: /[0-9]/,
+  special: /[^A-Za-z0-9]/,
+};
+
+function validatePassword(password) {
+  const errors = [];
+  if (typeof password !== 'string' || password.length < PASSWORD_REGEX.minLength) {
+    errors.push(`At least ${PASSWORD_REGEX.minLength} characters.`);
+  }
+  if (!PASSWORD_REGEX.upper.test(password)) {
+    errors.push('At least one uppercase letter (A-Z).');
+  }
+  if (!PASSWORD_REGEX.lower.test(password)) {
+    errors.push('At least one lowercase letter (a-z).');
+  }
+  if (!PASSWORD_REGEX.digit.test(password)) {
+    errors.push('At least one number (0-9).');
+  }
+  if (!PASSWORD_REGEX.special.test(password)) {
+    errors.push('At least one special character (e.g. @, #, $, %, &, !).');
+  }
+  return errors;
+}
+
+function passwordError(errors) {
+  return Object.assign(new Error(errors.join(' ')), { statusCode: 400 });
+}
+
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex')
 }
@@ -208,8 +240,9 @@ export async function acceptInvitation(token, password) {
     throw Object.assign(new Error('Invitation link is invalid or expired.'), { statusCode: 400 })
   }
 
-  if (typeof password !== 'string' || password.length < 12) {
-    throw Object.assign(new Error('Password must contain at least 12 characters.'), { statusCode: 400 })
+  const passwordErrors = validatePassword(password)
+  if (passwordErrors.length > 0) {
+    throw passwordError(passwordErrors)
   }
 
   if (Buffer.byteLength(password, 'utf8') > 72) {

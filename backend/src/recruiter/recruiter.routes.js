@@ -3,10 +3,16 @@ import { requireAuth } from '../auth/auth.middleware.js'
 import {
   getRecruiterRequirements,
   searchCandidates,
+  getRecruiterCandidateDetails,
+  streamRecruiterCandidateResume,
   submitCandidateForRequirement,
   createSecureResumeShare,
   getRequirementSubmissions,
   recordCandidateConsent,
+  getRecruiterApplications,
+  getRecruiterInterviews,
+  scheduleRecruiterInterview,
+  updateRecruiterApplicationStatus,
 } from './recruiter.controller.js'
 
 const router = Router()
@@ -24,7 +30,13 @@ router.use((req, res, next) => {
 
 router.get('/requirements', getRecruiterRequirements)
 router.get('/requirements/:requirementId/submissions', getRequirementSubmissions)
+router.get('/applications', getRecruiterApplications)
+router.patch('/applications/:applicationId/status', updateRecruiterApplicationStatus)
+router.get('/interviews', getRecruiterInterviews)
+router.post('/interviews', scheduleRecruiterInterview)
 router.get('/candidates', searchCandidates)
+router.get('/candidates/:candidateId', getRecruiterCandidateDetails)
+router.get('/candidates/:candidateId/resume', streamRecruiterCandidateResume)
 router.post('/consents', recordCandidateConsent)
 router.post('/submissions', submitCandidateForRequirement)
 router.post('/resume-shares', createSecureResumeShare)
