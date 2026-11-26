@@ -25,6 +25,7 @@ import {
 } from '../api/recruitment'
 import { DocumentPreviewModal } from '../components/DocumentPreviewModal'
 import RecruiterCandidateDetailsModal from '../components/RecruiterCandidateDetailsModal'
+import PaginationControls, { useListPagination } from '../components/PaginationControls'
 
 export default function RecruiterWorkspacePage() {
   const [requirements, setRequirements] = useState<RecruiterRequirement[]>([])
@@ -48,6 +49,12 @@ export default function RecruiterWorkspacePage() {
   const [previewCandidateName, setPreviewCandidateName] = useState('')
   const [previewExpiresAt, setPreviewExpiresAt] = useState<string | null>(null)
   const [detailCandidateId, setDetailCandidateId] = useState<number | null>(null)
+  const requirementPage = useListPagination(requirements)
+  const submissionPage = useListPagination(submissions, selectedReq?.requirement_id)
+  const candidatePage = useListPagination(
+    candidates,
+    `${selectedReq?.requirement_id}:${searchQuery}:${skillFilter}:${locFilter}:${expMin}`,
+  )
 
   useEffect(() => {
     loadRequirements()
@@ -198,7 +205,7 @@ export default function RecruiterWorkspacePage() {
             <span className="text-xs bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full">{requirements.length}</span>
           </div>
           <div className="divide-y divide-slate-100 overflow-y-auto flex-1">
-            {requirements.map((req) => {
+            {requirementPage.items.map((req) => {
               const isSelected = selectedReq?.requirement_id === req.requirement_id
               return (
                 <button
@@ -226,6 +233,12 @@ export default function RecruiterWorkspacePage() {
               <p className="p-5 text-sm text-slate-500">No requirements are assigned to your account.</p>
             )}
           </div>
+          <PaginationControls
+            page={requirementPage.page}
+            pageCount={requirementPage.pageCount}
+            total={requirementPage.total}
+            onPageChange={requirementPage.setPage}
+          />
         </div>
 
         {/* Right column: Action Workspace for Selected Requirement */}
@@ -294,7 +307,7 @@ export default function RecruiterWorkspacePage() {
                       <p className="text-xs text-slate-400 mt-1">Switch to "Find Candidates" tab to screen and attach talent.</p>
                     </div>
                   ) : (
-                    submissions.map((sub) => (
+                    submissionPage.items.map((sub) => (
                       <div
                         key={sub.application_id}
                         className="p-4 rounded-xl border border-slate-200 bg-white hover:border-blue-200 transition-all shadow-sm"
@@ -376,6 +389,12 @@ export default function RecruiterWorkspacePage() {
                       </div>
                     ))
                   )}
+                  <PaginationControls
+                    page={submissionPage.page}
+                    pageCount={submissionPage.pageCount}
+                    total={submissionPage.total}
+                    onPageChange={submissionPage.setPage}
+                  />
                 </div>
               )}
 
@@ -391,6 +410,13 @@ export default function RecruiterWorkspacePage() {
                     />
                     <span>I confirm the candidate has explicitly consented to be represented for this requirement and to sharing their profile with the customer.</span>
                   </label>
+                  <p className="px-4 pt-2 text-xs text-slate-500" role="status">
+                    {selectedReq.status !== 'OPEN'
+                      ? `Candidate submissions are unavailable while this requirement is ${selectedReq.status.replace(/_/g, ' ')}.`
+                      : consentConfirmed
+                        ? 'Consent confirmed. You can now submit an eligible candidate.'
+                        : 'Confirm candidate consent above before submitting.'}
+                  </p>
                   <div className="p-4 border-b border-slate-200 bg-slate-50 grid grid-cols-1 md:grid-cols-4 gap-3">
                     <input
                       type="text"
@@ -437,7 +463,7 @@ export default function RecruiterWorkspacePage() {
                         <p className="text-sm">No candidates match current criteria.</p>
                       </div>
                     ) : (
-                      candidates.map((cand) => (
+                      candidatePage.items.map((cand) => (
                         <div
                           key={cand.candidate_id}
                           className="p-4 rounded-xl border border-slate-200 bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm hover:border-blue-200"
@@ -474,9 +500,11 @@ export default function RecruiterWorkspacePage() {
                               <FileText className="w-3.5 h-3.5" /> Full profile
                             </button>
                             <button
+                              type="button"
                               onClick={() => handleCandidateSubmit(cand.candidate_id)}
-                              disabled={loading || !consentConfirmed || selectedReq.status !== 'OPEN'}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 transition shadow-sm"
+                              disabled={loading || selectedReq.status !== 'OPEN'}
+                              title={selectedReq.status !== 'OPEN' ? 'This requirement must be open before candidates can be submitted.' : undefined}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 transition shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               <UserCheck className="w-3.5 h-3.5" />
                               Screen & Submit
@@ -485,6 +513,12 @@ export default function RecruiterWorkspacePage() {
                         </div>
                       ))
                     )}
+                    <PaginationControls
+                      page={candidatePage.page}
+                      pageCount={candidatePage.pageCount}
+                      total={candidatePage.total}
+                      onPageChange={candidatePage.setPage}
+                    />
                   </div>
                 </div>
               )}

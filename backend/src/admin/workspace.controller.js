@@ -1,9 +1,20 @@
 import { pool } from '../config/db.js'
+import { ensureServiceOrdersForActiveAgreements } from '../agreements/agreement.service.js'
 import {
   convertRequirementIntake,
   createRequirementIntake,
   getRequirementConversionOptions,
 } from './requirement-intake.service.js'
+import {
+  attachRequirementSkills,
+  normalizeRequirementSkills,
+} from './requirement-skills.js'
+import { ensureCandidateProfile } from '../candidate/account-link.service.js'
+import {
+  createNotification,
+  notifyActiveCustomerContacts,
+  notifyAssignedRecruiters,
+} from '../notifications/notification.service.js'
 
 const MAX_LIMIT = 100
 const MAX_OFFSET = 1000000
@@ -262,6 +273,27 @@ async function insertWorkspaceRecord(module, input, actorId) {
     if (endDate && startDate && endDate < startDate) {
       throw badRequest('End date cannot be earlier than the start date.')
     }
+    const [coveredServices] = await pool.execute(
+      `SELECT line.agreement_service_line_id
+       FROM agreement_versions version
+       INNER JOIN agreement_service_lines line
+         ON line.agreement_version_id = version.agreement_version_id
+       WHERE version.agreement_id = ?
+         AND version.version_number = (
+           SELECT MAX(latest.version_number)
+           FROM agreement_versions latest
+           WHERE latest.agreement_id = version.agreement_id
+         )
+         AND line.service_type_id = ?
+       LIMIT 1`,
+      [agreementId, serviceTypeId],
+    )
+    if (!coveredServices[0]) {
+      throw Object.assign(
+        new Error('Select a service included in the agreement’s latest version.'),
+        { statusCode: 409 },
+      )
+    }
 
     const [result] = await pool.execute(
       `INSERT INTO service_orders
@@ -278,6 +310,7 @@ async function insertWorkspaceRecord(module, input, actorId) {
     const serviceOrderId = positiveId(input.serviceOrderId, 'approved service order')
     const jobProfileId = positiveId(input.jobProfileId, 'active job profile')
     const jobTitle = requiredText(input, 'jobTitle', 'Job title', 150)
+    const skills = normalizeRequirementSkills(input.skills)
     const jobDescription = requiredText(input, 'jobDescription', 'Job description', 60000)
     const headcount = numberValue(input.headcount, 'Headcount', { min: 1, max: 65535 })
     const workMode = enumValue(input.workMode, 'work mode', ['ONSITE', 'REMOTE', 'HYBRID'])
@@ -310,7 +343,17 @@ async function insertWorkspaceRecord(module, input, actorId) {
         `SELECT so.service_order_id
          FROM service_orders so
          INNER JOIN agreements a ON a.agreement_id = so.agreement_id
-         WHERE so.service_order_id = ? AND so.status IN ('APPROVED', 'IN_PROGRESS')
+         WHERE so.service_order_id = ? AND a.status = 'ACTIVE'
+           AND so.status IN ('APPROVED', 'IN_PROGRESS')
+           AND EXISTS (
+             SELECT 1
+             FROM agreement_versions active_version
+             INNER JOIN agreement_service_lines line
+               ON line.agreement_version_id = active_version.agreement_version_id
+             WHERE active_version.agreement_id = a.agreement_id
+               AND active_version.status = 'ACTIVE'
+               AND line.service_type_id = so.service_type_id
+           )
          LIMIT 1
          FOR UPDATE`,
         [serviceOrderId],
@@ -357,6 +400,7 @@ async function insertWorkspaceRecord(module, input, actorId) {
         ],
       )
 
+      await attachRequirementSkills(connection, result.insertId, skills)
       await connection.commit()
       return { requirementId: Number(result.insertId) }
     } catch (error) {
@@ -549,12 +593,12 @@ export function listCustomerAddresses(req, res, next) {
 
 export function listCustomerContacts(req, res, next) {
   return listPage(req, res, next, {
-    columns: `cc.contact_id, c.company_name, u.full_name, u.email,
+    columns: `cc.contact_id, c.company_name, COALESCE(u.full_name, 'Deleted account') AS full_name, u.email,
       cc.designation, cc.contact_type, cc.is_primary, cc.status`,
     from: `customer_contacts cc
       INNER JOIN customers c ON c.customer_id = cc.customer_id
-      INNER JOIN users u ON u.user_id = cc.user_id`,
-    searchColumns: ['c.company_name', 'u.full_name', 'u.email', 'cc.designation'],
+      LEFT JOIN users u ON u.user_id = cc.user_id`,
+    searchColumns: ['c.company_name', 'COALESCE(u.full_name, \'\')', 'u.email', 'cc.designation'],
     statusColumn: 'cc.status',
     filterColumns: [
       { column: 'c.company_name', type: 'text' },
@@ -593,7 +637,12 @@ export function listUsers(req, res, next) {
        INNER JOIN customers c ON c.customer_id = cc.customer_id
        WHERE cc.user_id = u.user_id
        ORDER BY cc.is_primary DESC, cc.contact_id
-       LIMIT 1) AS customer_company`,
+        LIMIT 1) AS customer_company,
+        CASE WHEN u.role = 'CANDIDATE' THEN
+          CASE WHEN EXISTS (
+            SELECT 1 FROM candidates candidate WHERE candidate.user_id = u.user_id
+          ) THEN 'LINKED' ELSE 'MISSING' END
+        ELSE NULL END AS candidate_profile_status`,
     from: 'users u',
     searchColumns: ['u.full_name', 'u.email', 'u.mobile', 'u.role', 'u.status'],
     statusColumn: 'u.status',
@@ -658,16 +707,27 @@ export function listJobProfiles(req, res, next) {
 export function listAgreements(req, res, next) {
   return listPage(req, res, next, {
     columns: `a.agreement_id, a.agreement_number, c.company_name, a.title,
-      a.status, a.effective_date, a.expiry_date, a.signed_date`,
+      COALESCE(current_version.status, a.status) AS status,
+      a.effective_date, a.expiry_date, a.signed_date`,
     from: `agreements a
-      INNER JOIN customers c ON c.customer_id = a.customer_id`,
-    searchColumns: ['a.agreement_number', 'c.company_name', 'a.title', 'a.status'],
-    statusColumn: 'a.status',
+      INNER JOIN customers c ON c.customer_id = a.customer_id
+      LEFT JOIN (
+        SELECT version.agreement_id, version.status
+        FROM agreement_versions version
+        INNER JOIN (
+          SELECT agreement_id, MAX(version_number) AS version_number
+          FROM agreement_versions
+          GROUP BY agreement_id
+        ) latest ON latest.agreement_id = version.agreement_id
+          AND latest.version_number = version.version_number
+      ) current_version ON current_version.agreement_id = a.agreement_id`,
+    searchColumns: ['a.agreement_number', 'c.company_name', 'a.title', 'COALESCE(current_version.status, a.status)'],
+    statusColumn: 'COALESCE(current_version.status, a.status)',
     filterColumns: [
       { column: 'a.agreement_number', type: 'text' },
       { column: 'c.company_name', type: 'text' },
       { column: 'a.title', type: 'text' },
-      { column: 'a.status', type: 'enum' },
+      { column: 'COALESCE(current_version.status, a.status)', type: 'enum' },
       { column: 'a.effective_date', type: 'date' },
       { column: 'a.expiry_date', type: 'date' },
     ],
@@ -798,9 +858,12 @@ export async function assignRequirementRecruiter(req, res, next) {
 
     await connection.beginTransaction()
     const [requirements] = await connection.execute(
-      `SELECT requirement_id, status
-       FROM job_requirements
-       WHERE requirement_id = ?
+      `SELECT r.requirement_id, r.status, r.requirement_number, r.job_title,
+              a.customer_id
+       FROM job_requirements r
+       INNER JOIN service_orders so ON so.service_order_id = r.service_order_id
+       INNER JOIN agreements a ON a.agreement_id = so.agreement_id
+       WHERE r.requirement_id = ?
        FOR UPDATE`,
       [requirementId],
     )
@@ -854,6 +917,20 @@ export async function assignRequirementRecruiter(req, res, next) {
       )
     }
 
+    await createNotification(connection, {
+      userId: recruiterId,
+      type: 'REQUIREMENT_ASSIGNED',
+      title: `Requirement assigned: ${requirements[0].requirement_number}`,
+      message: `You are assigned to ${requirements[0].job_title}.`,
+      targetUrl: '/app/assigned-requirements',
+    })
+    await notifyActiveCustomerContacts(connection, Number(requirements[0].customer_id), {
+      type: 'REQUIREMENT_RECRUITER_ASSIGNED',
+      title: `Recruiter assigned: ${requirements[0].requirement_number}`,
+      message: 'A recruiter has been assigned to your requirement.',
+      targetUrl: '/app/recruiters',
+    })
+
     await connection.commit()
     return res.json({ message: 'Recruiter assigned to requirement.' })
   } catch (error) {
@@ -864,8 +941,9 @@ export async function assignRequirementRecruiter(req, res, next) {
   }
 }
 
-export async function getRequirementCreationOptions(_req, res, next) {
+export async function getRequirementCreationOptions(req, res, next) {
   try {
+    await ensureServiceOrdersForActiveAgreements(req.authUser.user_id)
     const [jobProfiles] = await pool.execute(
       `SELECT job_profile_id, profile_code, profile_name
        FROM job_profiles
@@ -878,7 +956,16 @@ export async function getRequirementCreationOptions(_req, res, next) {
        FROM service_orders so
        INNER JOIN agreements a ON a.agreement_id = so.agreement_id
        INNER JOIN customers c ON c.customer_id = a.customer_id
-       WHERE so.status IN ('APPROVED', 'IN_PROGRESS')
+       WHERE a.status = 'ACTIVE' AND so.status IN ('APPROVED', 'IN_PROGRESS')
+         AND EXISTS (
+           SELECT 1
+           FROM agreement_versions active_version
+           INNER JOIN agreement_service_lines line
+             ON line.agreement_version_id = active_version.agreement_version_id
+           WHERE active_version.agreement_id = a.agreement_id
+             AND active_version.status = 'ACTIVE'
+             AND line.service_type_id = so.service_type_id
+         )
        ORDER BY c.company_name, so.order_number, so.service_order_id`,
     )
     return res.json({ jobProfiles, serviceOrders })
@@ -899,15 +986,15 @@ export async function listRequirementIntakes(req, res, next) {
   }
 
   return listPage(req, res, next, {
-    columns: `i.intake_id, c.company_name, u.full_name AS contact_name, u.email,
+    columns: `i.intake_id, c.company_name, COALESCE(u.full_name, 'Deleted account') AS contact_name, u.email,
       i.job_title, i.headcount, i.work_mode, i.employment_schedule,
       i.status, i.submitted_at, i.created_at`,
     from: `customer_requirement_intakes i
       INNER JOIN customers c ON c.customer_id = i.customer_id
       INNER JOIN customer_contacts cc ON cc.contact_id = i.contact_id
-      INNER JOIN users u ON u.user_id = cc.user_id`,
+      LEFT JOIN users u ON u.user_id = cc.user_id`,
     where: "i.status IN ('PENDING','SUBMITTED','CONVERTED','EXPIRED')",
-    searchColumns: ['c.company_name', 'u.full_name', 'u.email', 'i.job_title'],
+    searchColumns: ['c.company_name', 'COALESCE(u.full_name, \'\')', 'u.email', 'i.job_title'],
     statusColumn: 'i.status',
     filterColumns: [
       { column: 'c.company_name', type: 'text' },
@@ -945,7 +1032,7 @@ export async function sendCustomerRequirementIntake(req, res, next) {
 export async function getRequirementIntakeOptions(req, res, next) {
   try {
     const intakeId = positiveId(req.params.intakeId, 'requirement request')
-    return res.json(await getRequirementConversionOptions(intakeId))
+    return res.json(await getRequirementConversionOptions(intakeId, req.authUser.user_id))
   } catch (error) {
     return next(error)
   }
@@ -969,7 +1056,16 @@ export async function approveServiceOrder(req, res, next) {
     await connection.beginTransaction()
 
     const [rows] = await connection.execute(
-      `SELECT so.status, a.status AS agreement_status
+      `SELECT so.status, so.order_number, a.customer_id, a.status AS agreement_status,
+              EXISTS (
+                SELECT 1
+                FROM agreement_versions active_version
+                INNER JOIN agreement_service_lines line
+                  ON line.agreement_version_id = active_version.agreement_version_id
+                WHERE active_version.agreement_id = a.agreement_id
+                  AND active_version.status = 'ACTIVE'
+                  AND line.service_type_id = so.service_type_id
+              ) AS service_covered
        FROM service_orders so
        INNER JOIN agreements a ON a.agreement_id = so.agreement_id
        WHERE so.service_order_id = ?
@@ -985,6 +1081,9 @@ export async function approveServiceOrder(req, res, next) {
     if (order.agreement_status !== 'ACTIVE') {
       throw Object.assign(new Error('Activate and sign the customer agreement before approving this service order.'), { statusCode: 409 })
     }
+    if (Number(order.service_covered) !== 1) {
+      throw Object.assign(new Error('The active agreement does not include this service.'), { statusCode: 409 })
+    }
 
     await connection.execute(
       `UPDATE service_orders
@@ -992,6 +1091,12 @@ export async function approveServiceOrder(req, res, next) {
        WHERE service_order_id = ?`,
       [req.authUser.user_id, serviceOrderId],
     )
+    await notifyActiveCustomerContacts(connection, Number(order.customer_id), {
+      type: 'SERVICE_ORDER_APPROVED',
+      title: `Service order approved: ${order.order_number}`,
+      message: 'Your service order is approved and ready for requirement conversion.',
+      targetUrl: '/app/my-requirements',
+    })
     await connection.commit()
     return res.json({ message: 'Service order approved.' })
   } catch (error) {
@@ -1028,16 +1133,61 @@ export async function updateWorkspaceRecord(req, res, next) {
 
     if (module === 'users') {
       const fullName = requiredText(input, 'full_name', 'Full name', 100)
-      const mobile = optionalText(input, 'mobile', 'Mobile', 20)
-      const status = enumValue(input.status ?? 'ACTIVE', 'user status', ['INVITED', 'ACTIVE', 'INACTIVE', 'SUSPENDED'])
+      const mobile = optionalText(input, 'mobile', 'Mobile', 15)
+      if (mobile && !/^[+]?[0-9]{7,15}$/.test(mobile)) {
+        throw badRequest('Mobile number must contain 7 to 15 digits, optionally starting with +.')
+      }
+      const status = enumValue(input.status ?? 'ACTIVE', 'user status', ['INVITED', 'ACTIVE', 'INACTIVE', 'LOCKED'])
       const role = enumValue(input.role, 'role', ['ADMIN', 'RECRUITER', 'CUSTOMER', 'CANDIDATE'])
 
-      await pool.execute(
-        `UPDATE users
-         SET full_name = ?, mobile = ?, status = ?, role = ?
-         WHERE user_id = ?`,
-        [fullName, mobile, status, role, recordId],
-      )
+      const connection = await pool.getConnection()
+      try {
+        await connection.beginTransaction()
+        const [userRows] = await connection.execute(
+          'SELECT user_id, email, role FROM users WHERE user_id = ? LIMIT 1 FOR UPDATE',
+          [recordId],
+        )
+        const currentUser = userRows[0]
+        if (!currentUser) throw Object.assign(new Error('User account not found.'), { statusCode: 404 })
+
+        const [associationRows] = await connection.execute(
+          `SELECT
+             EXISTS(SELECT 1 FROM candidates WHERE user_id = ? OR email = ?) AS candidate_profile,
+             EXISTS(SELECT 1 FROM customer_contacts WHERE user_id = ?) AS customer_contact,
+             EXISTS(SELECT 1 FROM requirement_assignments WHERE recruiter_id = ?) AS recruiter_assignments`,
+          [recordId, currentUser.email, recordId, recordId],
+        )
+        const associations = associationRows[0]
+        if ((associations.candidate_profile && role !== 'CANDIDATE')
+          || (associations.customer_contact && role !== 'CUSTOMER')
+          || (associations.recruiter_assignments && role !== 'RECRUITER')) {
+          throw Object.assign(new Error('This user has role-specific records and cannot be changed to another role.'), { statusCode: 409 })
+        }
+
+        await connection.execute(
+          `UPDATE users
+           SET full_name = ?, mobile = ?, status = ?, role = ?
+           WHERE user_id = ?`,
+          [fullName, mobile, status, role, recordId],
+        )
+
+        if (role === 'CANDIDATE') {
+          await ensureCandidateProfile(connection, {
+            user_id: recordId,
+            full_name: fullName,
+            email: currentUser.email,
+            mobile,
+            role,
+          })
+        }
+
+        await connection.commit()
+      } catch (error) {
+        await connection.rollback()
+        throw error
+      } finally {
+        connection.release()
+      }
       return res.json({ message: 'User updated successfully.' })
     }
 
@@ -1082,20 +1232,17 @@ export async function updateWorkspaceRecord(req, res, next) {
 
     if (module === 'agreements') {
       const title = requiredText(input, 'title', 'Title', 200)
-      const status = enumValue(input.status ?? 'DRAFT', 'agreement status', [
-        'DRAFT', 'PENDING_SIGNATURE', 'ACTIVE', 'EXPIRED', 'TERMINATED',
-      ])
       const effectiveDate = optionalDate(input.effective_date, 'Effective date')
       const expiryDate = optionalDate(input.expiry_date, 'Expiry date')
       const signedDate = optionalDate(input.signed_date, 'Signed date')
 
       await pool.execute(
         `UPDATE agreements
-         SET title = ?, status = ?, effective_date = ?, expiry_date = ?, signed_date = ?
+         SET title = ?, effective_date = ?, expiry_date = ?, signed_date = ?
          WHERE agreement_id = ?`,
-        [title, status, effectiveDate, expiryDate, signedDate, recordId],
+        [title, effectiveDate, expiryDate, signedDate, recordId],
       )
-      return res.json({ message: 'Agreement updated successfully.' })
+      return res.json({ message: 'Agreement details updated. Use the agreement workflow to change its status.' })
     }
 
     if (module === 'rate-cards') {
@@ -1124,14 +1271,70 @@ export async function updateWorkspaceRecord(req, res, next) {
       const startDate = optionalDate(input.start_date, 'Start date')
       const endDate = optionalDate(input.end_date, 'End date')
       const scopeDescription = optionalText(input, 'scope_description', 'Scope', 60000)
+      if (endDate && startDate && endDate < startDate) {
+        throw badRequest('End date cannot be earlier than the start date.')
+      }
+      const connection = await pool.getConnection()
+      try {
+        await connection.beginTransaction()
+        const [currentRows] = await connection.execute(
+          `SELECT so.status, so.order_number, a.customer_id, a.status AS agreement_status,
+                EXISTS (
+                  SELECT 1
+                  FROM agreement_versions active_version
+                  INNER JOIN agreement_service_lines line
+                    ON line.agreement_version_id = active_version.agreement_version_id
+                  WHERE active_version.agreement_id = a.agreement_id
+                    AND active_version.status = 'ACTIVE'
+                    AND line.service_type_id = so.service_type_id
+                ) AS service_covered
+           FROM service_orders so
+           INNER JOIN agreements a ON a.agreement_id = so.agreement_id
+           WHERE so.service_order_id = ?
+           LIMIT 1
+           FOR UPDATE`,
+          [recordId],
+        )
+        const current = currentRows[0]
+        if (!current) throw Object.assign(new Error('Service order not found.'), { statusCode: 404 })
+        const transitions = {
+          DRAFT: ['PENDING_APPROVAL', 'CANCELLED'],
+          PENDING_APPROVAL: [],
+          APPROVED: ['IN_PROGRESS', 'CANCELLED'],
+          IN_PROGRESS: ['COMPLETED', 'CANCELLED'],
+          COMPLETED: [],
+          CANCELLED: [],
+        }
+        if (status !== current.status && !transitions[current.status]?.includes(status)) {
+          throw Object.assign(new Error('Use the available service-order workflow actions for this status transition.'), { statusCode: 409 })
+        }
+        if (status === 'IN_PROGRESS'
+          && (current.agreement_status !== 'ACTIVE' || Number(current.service_covered) !== 1)) {
+          throw Object.assign(new Error('Only services on an active agreement can move in progress.'), { statusCode: 409 })
+        }
 
-      await pool.execute(
-        `UPDATE service_orders
-         SET title = ?, status = ?, start_date = ?, end_date = ?, scope_description = ?
-         WHERE service_order_id = ?`,
-        [title, status, startDate, endDate, scopeDescription, recordId],
-      )
-      return res.json({ message: 'Service order updated successfully.' })
+        await connection.execute(
+          `UPDATE service_orders
+           SET title = ?, status = ?, start_date = ?, end_date = ?, scope_description = ?
+           WHERE service_order_id = ?`,
+          [title, status, startDate, endDate, scopeDescription, recordId],
+        )
+        if (status !== current.status) {
+          await notifyActiveCustomerContacts(connection, Number(current.customer_id), {
+            type: 'SERVICE_ORDER_STATUS_CHANGED',
+            title: `Service order ${status.toLowerCase()}: ${current.order_number}`,
+            message: `The status of service order ${current.order_number} changed to ${status.replace(/_/g, ' ')}.`,
+            targetUrl: '/app/my-requirements',
+          })
+        }
+        await connection.commit()
+        return res.json({ message: 'Service order updated successfully.' })
+      } catch (error) {
+        await connection.rollback()
+        throw error
+      } finally {
+        connection.release()
+      }
     }
 
     if (module === 'requirements') {
@@ -1143,14 +1346,67 @@ export async function updateWorkspaceRecord(req, res, next) {
       const workMode = enumValue(input.work_mode, 'work mode', ['ONSITE', 'REMOTE', 'HYBRID'])
       const salaryMin = numberValue(input.salary_min, 'Minimum salary', { optional: true })
       const salaryMax = numberValue(input.salary_max, 'Maximum salary', { optional: true })
+      if (!Number.isSafeInteger(headcount)) {
+        throw badRequest('Headcount must be a whole number.')
+      }
+      if (salaryMin !== null && salaryMax !== null && salaryMax < salaryMin) {
+        throw badRequest('Maximum salary cannot be less than minimum salary.')
+      }
+      const connection = await pool.getConnection()
+      try {
+        await connection.beginTransaction()
+        const [currentRows] = await connection.execute(
+          `SELECT r.status, r.requirement_number, r.job_title, a.customer_id
+           FROM job_requirements r
+           INNER JOIN service_orders so ON so.service_order_id = r.service_order_id
+           INNER JOIN agreements a ON a.agreement_id = so.agreement_id
+           WHERE r.requirement_id = ?
+           LIMIT 1
+           FOR UPDATE`,
+          [recordId],
+        )
+        const current = currentRows[0]
+        if (!current) throw Object.assign(new Error('Requirement not found.'), { statusCode: 404 })
+        const transitions = {
+          PENDING_APPROVAL: ['APPROVED', 'CANCELLED'],
+          APPROVED: ['OPEN', 'CANCELLED'],
+          OPEN: ['ON_HOLD', 'FILLED', 'CANCELLED'],
+          ON_HOLD: ['OPEN', 'CANCELLED'],
+          FILLED: [],
+          CANCELLED: [],
+        }
+        if (status !== current.status && !transitions[current.status]?.includes(status)) {
+          throw Object.assign(new Error('This requirement status transition is not allowed.'), { statusCode: 409 })
+        }
 
-      await pool.execute(
-        `UPDATE job_requirements
-         SET job_title = ?, status = ?, headcount = ?, work_mode = ?, salary_min = ?, salary_max = ?
-         WHERE requirement_id = ?`,
-        [jobTitle, status, headcount, workMode, salaryMin, salaryMax, recordId],
-      )
-      return res.json({ message: 'Requirement updated successfully.' })
+        await connection.execute(
+          `UPDATE job_requirements
+           SET job_title = ?, status = ?, headcount = ?, work_mode = ?, salary_min = ?, salary_max = ?
+           WHERE requirement_id = ?`,
+          [jobTitle, status, headcount, workMode, salaryMin, salaryMax, recordId],
+        )
+        if (status !== current.status) {
+          await notifyActiveCustomerContacts(connection, Number(current.customer_id), {
+            type: 'REQUIREMENT_STATUS_CHANGED',
+            title: `Requirement ${status.toLowerCase()}: ${current.requirement_number}`,
+            message: `${current.job_title} changed to ${status.replace(/_/g, ' ')}.`,
+            targetUrl: '/app/my-requirements',
+          })
+          await notifyAssignedRecruiters(connection, recordId, {
+            type: 'REQUIREMENT_STATUS_CHANGED',
+            title: `Requirement ${status.toLowerCase()}: ${current.requirement_number}`,
+            message: `${current.job_title} changed to ${status.replace(/_/g, ' ')}.`,
+            targetUrl: '/app/assigned-requirements',
+          })
+        }
+        await connection.commit()
+        return res.json({ message: 'Requirement updated successfully.' })
+      } catch (error) {
+        await connection.rollback()
+        throw error
+      } finally {
+        connection.release()
+      }
     }
 
     if (module === 'customer-contacts') {

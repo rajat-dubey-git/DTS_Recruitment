@@ -39,6 +39,8 @@ export default function RequirementConversionDialog({ intakeId, onClose, onConve
       await workspaceApi.convertRequirementIntake(intakeId, {
         jobProfileId: Number(form.get('jobProfileId')),
         serviceOrderId: Number(form.get('serviceOrderId')),
+        jobTitle: String(form.get('jobTitle') ?? ''),
+        skills: String(form.get('skills') ?? '').split(/[,\n]/).map((skill) => skill.trim()).filter(Boolean),
       })
       onConverted()
     } catch (convertError) {
@@ -54,7 +56,7 @@ export default function RequirementConversionDialog({ intakeId, onClose, onConve
         <div className="customer-modal-heading">
           <div>
             <h2 id="convert-requirement-title">Review and create requirement</h2>
-            <p>Map this customer submission to an active job profile and an approved service order.</p>
+            <p>Map this customer submission to an active job profile and a service covered by the active agreement.</p>
           </div>
           <button type="button" className="customer-modal-close" onClick={onClose} aria-label="Close">×</button>
         </div>
@@ -63,6 +65,10 @@ export default function RequirementConversionDialog({ intakeId, onClose, onConve
           <form onSubmit={(event) => void convert(event)}>
             <section className="requirement-review">
               <h3>{options.request.jobTitle} — {options.request.companyName}</h3>
+              <label>
+                Job title *
+                <input name="jobTitle" required maxLength={150} defaultValue={options.request.jobTitle} />
+              </label>
               <p>{options.request.jobDescription}</p>
               <dl>
                 <div><dt>Headcount</dt><dd>{options.request.headcount}</dd></div>
@@ -75,7 +81,7 @@ export default function RequirementConversionDialog({ intakeId, onClose, onConve
               </dl>
             </section>
             <label>
-              Active job profile *
+              Job profile category *
               <select name="jobProfileId" required defaultValue="">
                 <option value="">Select a job profile…</option>
                 {options.jobProfiles.map((profile) => (
@@ -86,7 +92,11 @@ export default function RequirementConversionDialog({ intakeId, onClose, onConve
               </select>
             </label>
             <label>
-              Approved service order for this customer *
+              Required skills (separate with commas or new lines)
+              <textarea name="skills" rows={2} defaultValue={options.request.skills.join(', ')} />
+            </label>
+            <label>
+              Active agreement service order *
               <select name="serviceOrderId" required defaultValue="">
                 <option value="">Select a service order…</option>
                 {options.serviceOrders.map((order) => (
@@ -97,7 +107,12 @@ export default function RequirementConversionDialog({ intakeId, onClose, onConve
               </select>
             </label>
             {options.jobProfiles.length === 0 && <p className="customer-form-error">Create and activate a job profile before converting this request.</p>}
-            {options.serviceOrders.length === 0 && <p className="customer-form-error">This customer has no approved or in-progress service order.</p>}
+            {options.serviceOrders.length === 0 && (
+              <p className="customer-form-error">
+                No eligible service order is available for this customer. Activate an agreement with selected services,
+                then refresh this request; eligible service orders are provisioned automatically.
+              </p>
+            )}
             {error && <div className="customer-form-error" role="alert">{error}</div>}
             <div className="customer-modal-actions">
               <button type="button" className="btn btn-outline" onClick={onClose}>Cancel</button>

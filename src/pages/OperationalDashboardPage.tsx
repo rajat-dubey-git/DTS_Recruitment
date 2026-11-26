@@ -12,6 +12,7 @@ const metricIcons: Record<string, { icon: LucideIcon; tone: string }> = {
   openRequirements: { icon: ClipboardList, tone: 'orange' },
   totalRequirements: { icon: ClipboardList, tone: 'blue' },
   activeRequirements: { icon: ClipboardList, tone: 'green' },
+  submittedRequests: { icon: ClipboardList, tone: 'orange' },
   submittedCandidates: { icon: Users, tone: 'violet' },
   upcomingInterviews: { icon: ClipboardList, tone: 'orange' },
   availableCandidates: { icon: Users, tone: 'violet' },

@@ -1,6 +1,16 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { pool } from '../config/db.js'
+import { ensureServiceOrdersForActiveAgreements } from '../agreements/agreement.service.js'
 import { isEmailConfigured, sendRequirementIntakeEmail } from '../services/email.service.js'
+import {
+  notifyActiveAdmins,
+  notifyActiveCustomerContacts,
+} from '../notifications/notification.service.js'
+import {
+  attachRequirementSkills,
+  normalizeRequirementSkills,
+  parseStoredRequirementSkills,
+} from './requirement-skills.js'
 
 const WORK_MODES = new Set(['ONSITE', 'REMOTE', 'HYBRID'])
 const SCHEDULES = new Set(['FULL_TIME', 'PART_TIME'])
@@ -43,6 +53,7 @@ function validDate(value) {
 function validateSubmission(input) {
   const jobTitle = String(input?.jobTitle ?? '').trim()
   const jobDescription = String(input?.jobDescription ?? '').trim()
+  const skills = normalizeRequirementSkills(input?.skills)
   const headcount = Number(input?.headcount)
   const workMode = String(input?.workMode ?? '').trim().toUpperCase()
   const workLocation = String(input?.workLocation ?? '').trim() || null
@@ -88,6 +99,7 @@ function validateSubmission(input) {
   return {
     jobTitle,
     jobDescription,
+    skills,
     headcount,
     workMode,
     workLocation,
@@ -98,6 +110,118 @@ function validateSubmission(input) {
     employmentSchedule,
     hoursPerWeek,
     targetJoinDate,
+  }
+}
+
+async function getActiveCustomerContact(executor, userId, lock = false) {
+  const [contacts] = await executor.execute(
+    `SELECT cc.customer_id, cc.contact_id
+     FROM customer_contacts cc
+     INNER JOIN users u ON u.user_id = cc.user_id
+     WHERE cc.user_id = ? AND cc.status = 'ACTIVE' AND u.role = 'CUSTOMER'
+     ORDER BY cc.is_primary DESC, cc.contact_id
+     LIMIT 1${lock ? ' FOR UPDATE' : ''}`,
+    [userId],
+  )
+  const contact = contacts[0]
+  if (!contact) {
+    throw httpError('No active customer organisation is linked to this account.', 403)
+  }
+  return contact
+}
+
+export async function listCustomerRequirements(userId) {
+  const contact = await getActiveCustomerContact(pool, userId)
+  await pool.execute(
+    `UPDATE customer_requirement_intakes
+     SET status = 'EXPIRED'
+     WHERE customer_id = ? AND status = 'PENDING' AND expires_at <= CURRENT_TIMESTAMP`,
+    [contact.customer_id],
+  )
+  const [[requests], [requirements]] = await Promise.all([
+    pool.execute(
+      `SELECT i.intake_id, i.job_title, i.skills_requested, i.headcount, i.work_mode, i.employment_schedule,
+              i.status, i.submitted_at, i.created_at,
+              r.requirement_id, r.requirement_number, r.status AS requirement_status
+       FROM customer_requirement_intakes i
+       LEFT JOIN job_requirements r ON r.requirement_id = i.requirement_id
+       WHERE i.customer_id = ?
+       ORDER BY i.created_at DESC, i.intake_id DESC`,
+      [contact.customer_id],
+    ),
+    pool.execute(
+      `SELECT r.requirement_id, r.requirement_number, r.job_title, r.headcount,
+              r.status, r.work_mode, r.work_location, r.employment_schedule,
+              r.created_at, so.order_number
+       FROM job_requirements r
+       INNER JOIN service_orders so ON so.service_order_id = r.service_order_id
+       INNER JOIN agreements a ON a.agreement_id = so.agreement_id
+       WHERE a.customer_id = ?
+       ORDER BY r.created_at DESC, r.requirement_id DESC`,
+      [contact.customer_id],
+    ),
+  ])
+  return {
+    requests: requests.map((request) => ({
+      ...request,
+      skills_requested: parseStoredRequirementSkills(request.skills_requested),
+    })),
+    requirements,
+  }
+}
+
+export async function submitCustomerRequirementRequest(userId, input) {
+  const submission = validateSubmission(input)
+  const connection = await pool.getConnection()
+
+  try {
+    await connection.beginTransaction()
+    const contact = await getActiveCustomerContact(connection, userId, true)
+    const token = randomBytes(32).toString('hex')
+    const [result] = await connection.execute(
+      `INSERT INTO customer_requirement_intakes
+        (customer_id, contact_id, token_hash, expires_at, status, job_title, skills_requested,
+         job_description, headcount, work_mode, work_location,
+         experience_min_years, experience_max_years, salary_min, salary_max,
+         employment_schedule, hours_per_week, target_join_date, submitted_at, created_by)
+       VALUES (?, ?, ?, DATE_ADD(CURRENT_TIMESTAMP, INTERVAL 72 HOUR), 'SUBMITTED',
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
+      [
+        contact.customer_id,
+        contact.contact_id,
+        tokenHash(token),
+        submission.jobTitle,
+         JSON.stringify(submission.skills),
+        submission.jobDescription,
+        submission.headcount,
+        submission.workMode,
+        submission.workLocation,
+        submission.experienceMin,
+        submission.experienceMax,
+        submission.salaryMin,
+        submission.salaryMax,
+        submission.employmentSchedule,
+        submission.hoursPerWeek,
+        submission.targetJoinDate,
+        userId,
+      ],
+    )
+    await notifyActiveAdmins(connection, {
+      type: 'CUSTOMER_REQUIREMENT_SUBMITTED',
+      title: 'New customer requirement',
+      message: `A customer submitted "${submission.jobTitle}" for review.`,
+      targetUrl: '/app/admin/requirement-intakes',
+    })
+    await connection.commit()
+    return {
+      intakeId: Number(result.insertId),
+      message: 'Your hiring requirement was submitted for review.',
+    }
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
   }
 }
 
@@ -247,7 +371,7 @@ export async function submitRequirementIntake(token, input) {
 
     await connection.execute(
       `UPDATE customer_requirement_intakes
-       SET job_title = ?, job_description = ?, headcount = ?, work_mode = ?,
+       SET job_title = ?, skills_requested = ?, job_description = ?, headcount = ?, work_mode = ?,
            work_location = ?, experience_min_years = ?, experience_max_years = ?,
            salary_min = ?, salary_max = ?, employment_schedule = ?,
            hours_per_week = ?, target_join_date = ?, status = 'SUBMITTED',
@@ -255,6 +379,7 @@ export async function submitRequirementIntake(token, input) {
        WHERE intake_id = ?`,
       [
         submission.jobTitle,
+        JSON.stringify(submission.skills),
         submission.jobDescription,
         submission.headcount,
         submission.workMode,
@@ -279,13 +404,13 @@ export async function submitRequirementIntake(token, input) {
   }
 }
 
-export async function getRequirementConversionOptions(intakeId) {
+export async function getRequirementConversionOptions(intakeId, adminUserId) {
   if (!Number.isSafeInteger(intakeId) || intakeId < 1) {
     throw httpError('Invalid requirement request.', 400)
   }
 
   const [intakes] = await pool.execute(
-    `SELECT i.customer_id, i.status, i.job_title, i.job_description, i.headcount,
+    `SELECT i.customer_id, i.status, i.job_title, i.skills_requested, i.job_description, i.headcount,
             i.work_mode, i.work_location, i.experience_min_years,
             i.experience_max_years, i.salary_min, i.salary_max,
             i.employment_schedule, i.hours_per_week, i.target_join_date,
@@ -300,6 +425,7 @@ export async function getRequirementConversionOptions(intakeId) {
   if (!intake || intake.status !== 'SUBMITTED') {
     throw httpError('Only submitted customer forms can be converted.', 409)
   }
+  await ensureServiceOrdersForActiveAgreements(adminUserId, Number(intake.customer_id))
 
   const [jobProfiles] = await pool.execute(
     `SELECT job_profile_id, profile_code, profile_name
@@ -311,7 +437,17 @@ export async function getRequirementConversionOptions(intakeId) {
     `SELECT so.service_order_id, so.order_number, so.title, a.agreement_number
      FROM service_orders so
      INNER JOIN agreements a ON a.agreement_id = so.agreement_id
-     WHERE a.customer_id = ? AND so.status IN ('APPROVED', 'IN_PROGRESS')
+     WHERE a.customer_id = ? AND a.status = 'ACTIVE'
+       AND so.status IN ('APPROVED', 'IN_PROGRESS')
+       AND EXISTS (
+         SELECT 1
+         FROM agreement_versions active_version
+         INNER JOIN agreement_service_lines line
+           ON line.agreement_version_id = active_version.agreement_version_id
+         WHERE active_version.agreement_id = a.agreement_id
+           AND active_version.status = 'ACTIVE'
+           AND line.service_type_id = so.service_type_id
+       )
      ORDER BY so.created_at DESC, so.service_order_id DESC`,
     [intake.customer_id],
   )
@@ -320,6 +456,7 @@ export async function getRequirementConversionOptions(intakeId) {
     request: {
       companyName: intake.company_name,
       jobTitle: intake.job_title,
+      skills: parseStoredRequirementSkills(intake.skills_requested),
       jobDescription: intake.job_description,
       headcount: intake.headcount,
       workMode: intake.work_mode,
@@ -362,13 +499,34 @@ export async function convertRequirementIntake(intakeId, input, reviewedBy) {
     if (!intake || intake.status !== 'SUBMITTED') {
       throw httpError('Only submitted customer forms can be converted.', 409)
     }
+    const jobTitle = input?.jobTitle === undefined
+      ? String(intake.job_title ?? '').trim()
+      : typeof input.jobTitle === 'string'
+        ? input.jobTitle.trim()
+        : ''
+    if (!jobTitle || jobTitle.length > 150) {
+      throw httpError('Job title is required and must be 150 characters or fewer.', 400)
+    }
+    const skills = input?.skills === undefined
+      ? parseStoredRequirementSkills(intake.skills_requested)
+      : normalizeRequirementSkills(input.skills)
 
     const [orders] = await connection.execute(
       `SELECT service_order_id
        FROM service_orders so
        INNER JOIN agreements a ON a.agreement_id = so.agreement_id
        WHERE so.service_order_id = ? AND a.customer_id = ?
+         AND a.status = 'ACTIVE'
          AND so.status IN ('APPROVED', 'IN_PROGRESS')
+         AND EXISTS (
+           SELECT 1
+           FROM agreement_versions active_version
+           INNER JOIN agreement_service_lines line
+             ON line.agreement_version_id = active_version.agreement_version_id
+           WHERE active_version.agreement_id = a.agreement_id
+             AND active_version.status = 'ACTIVE'
+             AND line.service_type_id = so.service_type_id
+         )
        LIMIT 1
        FOR UPDATE`,
       [serviceOrderId, intake.customer_id],
@@ -401,7 +559,7 @@ export async function convertRequirementIntake(intakeId, input, reviewedBy) {
         serviceOrderId,
         jobProfileId,
         intake.contact_user_id,
-        intake.job_title,
+        jobTitle,
         intake.job_description,
         intake.headcount,
         intake.work_mode,
@@ -415,6 +573,7 @@ export async function convertRequirementIntake(intakeId, input, reviewedBy) {
         intake.target_join_date,
       ],
     )
+    await attachRequirementSkills(connection, result.insertId, skills)
 
     await connection.execute(
       `UPDATE customer_requirement_intakes
@@ -423,6 +582,12 @@ export async function convertRequirementIntake(intakeId, input, reviewedBy) {
        WHERE intake_id = ?`,
       [reviewedBy, result.insertId, intakeId],
     )
+    await notifyActiveCustomerContacts(connection, Number(intake.customer_id), {
+      type: 'CUSTOMER_REQUIREMENT_CONVERTED',
+      title: `Requirement received: ${requirementNumber}`,
+      message: 'Your request was converted and is awaiting internal approval.',
+      targetUrl: '/app/my-requirements',
+    })
     await connection.commit()
     return {
       requirementId: Number(result.insertId),

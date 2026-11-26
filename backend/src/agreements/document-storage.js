@@ -95,6 +95,30 @@ export async function storeSignedPdf(tempPath, agreementId, versionNumber) {
   }
 }
 
+export async function storePrivatePdf(tempPath, relativeDirectory, namePrefix) {
+  const fileHandle = await open(tempPath, 'r')
+  try {
+    const header = Buffer.alloc(5)
+    const { bytesRead } = await fileHandle.read(header, 0, header.length, 0)
+    if (bytesRead !== 5 || header.toString('ascii') !== '%PDF-') {
+      throw storageError('Upload must be a valid PDF file.', 400)
+    }
+  } finally {
+    await fileHandle.close()
+  }
+
+  const directory = await ensurePrivateStorageDirectory(relativeDirectory)
+  const safePrefix = String(namePrefix).replace(/[^a-zA-Z0-9._-]/g, '_')
+  const fileName = `${safePrefix}-${randomUUID()}.pdf`
+  const destination = path.join(directory, fileName)
+  await rename(tempPath, destination)
+  return {
+    storageKey: path.join(relativeDirectory, fileName),
+    absolutePath: destination,
+    ...await fileMetadata(destination),
+  }
+}
+
 export async function createDraftPdf(agreementId, versionNumber, buildDocument) {
   const relativeDirectory = path.join('agreements', String(agreementId))
   const directory = await ensurePrivateStorageDirectory(relativeDirectory)

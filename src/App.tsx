@@ -64,6 +64,8 @@ import OperationalDashboardPage from './pages/OperationalDashboardPage'
 import AdminWorkspacePage from './pages/admin/AdminWorkspacePage'
 import AdminAgreementReviewPage from './pages/admin/AdminAgreementReviewPage'
 import AdminCandidatesPage from './pages/admin/AdminCandidatesPage'
+import AdminInvoicesPage from './pages/admin/AdminInvoicesPage'
+import AdminOffersPage from './pages/admin/AdminOffersPage'
 import CustomerAgreementsPage from './pages/CustomerAgreementsPage'
 import RecruiterWorkspacePage from './pages/RecruiterWorkspacePage'
 import RecruiterCandidatesPage from './pages/RecruiterCandidatesPage'
@@ -73,11 +75,13 @@ import CustomerCandidatesPage from './pages/CustomerCandidatesPage'
 import CustomerJobProfilesPage from './pages/CustomerJobProfilesPage'
 import CustomerRequirementsPage from './pages/CustomerRequirementsPage'
 import CustomerRecruitersPage from './pages/CustomerRecruitersPage'
+import CustomerInterviewsPage from './pages/CustomerInterviewsPage'
 import CustomerInvoicesPage from './pages/CustomerInvoicesPage'
 import CandidateDashboardPage from './pages/CandidateDashboardPage'
 import CandidateResumePage from './pages/CandidateResumePage'
 import CandidateProfilePage from './pages/CandidateProfilePage'
 import CandidateApplicationsPage from './pages/CandidateApplicationsPage'
+import CandidateOffersPage from './pages/CandidateOffersPage'
 import CandidateRequirementsPage from './pages/CandidateRequirementsPage'
 import RequirementIntakePage from './pages/RequirementIntakePage'
 import CandidateRoute from './routes/CandidateRoute'
@@ -108,6 +112,8 @@ export default function App() {
           <Route element={<AdminRoute />}>
             <Route path="/app/admin" element={<Navigate to="/app/admin/customers" replace />} />
             <Route path="/app/admin/candidates" element={<AdminCandidatesPage />} />
+            <Route path="/app/admin/invoices" element={<AdminInvoicesPage />} />
+            <Route path="/app/admin/offers" element={<AdminOffersPage />} />
             <Route path="/app/admin/:module" element={<AdminWorkspacePage />} />
             <Route path="/app/admin/agreements/:agreementId/review" element={<AdminAgreementReviewPage />} />
           </Route>
@@ -118,6 +124,7 @@ export default function App() {
             <Route path="/app/job-profiles" element={<CustomerJobProfilesPage />} />
             <Route path="/app/my-requirements" element={<CustomerRequirementsPage />} />
             <Route path="/app/recruiters" element={<CustomerRecruitersPage />} />
+            <Route path="/app/interviews" element={<CustomerInterviewsPage />} />
             <Route path="/app/invoices" element={<CustomerInvoicesPage />} />
           </Route>
 
@@ -132,6 +139,7 @@ export default function App() {
             <Route path="/app/candidate/resume" element={<CandidateResumePage />} />
             <Route path="/app/candidate/requirements" element={<CandidateRequirementsPage />} />
             <Route path="/app/candidate/applications" element={<CandidateApplicationsPage />} />
+            <Route path="/app/candidate/offers" element={<CandidateOffersPage />} />
           </Route>
 
           <Route path="/app/:section" element={<ComingSoonPage />} />

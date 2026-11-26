@@ -13,6 +13,7 @@ import {
 import { CustomerSharedCandidate } from '../types/recruitment'
 import { fetchCustomerSharedCandidates, submitCandidateDecision } from '../api/recruitment'
 import { DocumentPreviewModal } from '../components/DocumentPreviewModal'
+import PaginationControls, { useListPagination } from '../components/PaginationControls'
 
 export default function CustomerCandidatesPage() {
   const [candidates, setCandidates] = useState<CustomerSharedCandidate[]>([])
@@ -31,6 +32,7 @@ export default function CustomerCandidatesPage() {
   const [previewShareId, setPreviewShareId] = useState<number | null>(null)
   const [previewCandidateName, setPreviewCandidateName] = useState('')
   const [previewExpiresAt, setPreviewExpiresAt] = useState<string | null>(null)
+  const candidatePage = useListPagination(candidates)
 
   useEffect(() => {
     loadSharedCandidates()
@@ -115,7 +117,7 @@ export default function CustomerCandidatesPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {candidates.map((cand) => {
+          {candidatePage.items.map((cand) => {
             const isExpired = !cand.is_accessible
 
             return (
@@ -259,6 +261,14 @@ export default function CustomerCandidatesPage() {
               </div>
             )
           })}
+          <div className="col-span-full">
+            <PaginationControls
+              page={candidatePage.page}
+              pageCount={candidatePage.pageCount}
+              total={candidatePage.total}
+              onPageChange={candidatePage.setPage}
+            />
+          </div>
         </div>
       )}
 

@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { BriefcaseBusiness, MapPin, Search } from 'lucide-react'
 import { candidateApi } from '../api/candidate'
 import type { CandidateRequirement } from '../api/candidate'
+import PaginationControls, { useListPagination } from '../components/PaginationControls'
 
 export default function CandidateRequirementsPage() {
   const [requirements, setRequirements] = useState<CandidateRequirement[]>([])
@@ -12,6 +13,7 @@ export default function CandidateRequirementsPage() {
   const [busyRequirement, setBusyRequirement] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const requirementPage = useListPagination(requirements, `${search}:${location}`)
 
   async function loadRequirements(searchTerm = search, locationTerm = location) {
     setError('')
@@ -106,7 +108,7 @@ export default function CandidateRequirementsPage() {
           <div className="panel database-message">No open requirements match your search.</div>
         ) : (
           <div className="space-y-4">
-            {requirements.map((requirement) => (
+            {requirementPage.items.map((requirement) => (
               <article key={requirement.requirement_id} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
@@ -146,6 +148,12 @@ export default function CandidateRequirementsPage() {
                 )}
               </article>
             ))}
+            <PaginationControls
+              page={requirementPage.page}
+              pageCount={requirementPage.pageCount}
+              total={requirementPage.total}
+              onPageChange={requirementPage.setPage}
+            />
           </div>
         )}
     </div>

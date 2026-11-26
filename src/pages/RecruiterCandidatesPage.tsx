@@ -8,6 +8,7 @@ import {
 } from '../api/recruitment'
 import type { Candidate, RecruiterRequirement } from '../types/recruitment'
 import RecruiterCandidateDetailsModal from '../components/RecruiterCandidateDetailsModal'
+import PaginationControls, { useListPagination } from '../components/PaginationControls'
 
 export default function RecruiterCandidatesPage() {
   const [requirements, setRequirements] = useState<RecruiterRequirement[]>([])
@@ -27,6 +28,10 @@ export default function RecruiterCandidatesPage() {
   const [detailCandidateId, setDetailCandidateId] = useState<number | null>(null)
 
   const openRequirements = requirements.filter((requirement) => requirement.status === 'OPEN')
+  const candidatePage = useListPagination(
+    candidates,
+    `${selectedRequirement}:${query}:${skill}:${location}:${experienceMin}:${experienceMax}`,
+  )
 
   useEffect(() => {
     let active = true
@@ -196,7 +201,7 @@ export default function RecruiterCandidatesPage() {
           <div className="customer-empty">No candidates match the selected search criteria.</div>
         ) : (
           <div className="agreement-line-list">
-            {candidates.map((candidate) => (
+            {candidatePage.items.map((candidate) => (
               <article className="agreement-line-card" key={candidate.candidate_id}>
                 <div style={{ flex: 1 }}>
                   <strong>{candidate.full_name}</strong>
@@ -227,6 +232,12 @@ export default function RecruiterCandidatesPage() {
                 </div>
               </article>
             ))}
+            <PaginationControls
+              page={candidatePage.page}
+              pageCount={candidatePage.pageCount}
+              total={candidatePage.total}
+              onPageChange={candidatePage.setPage}
+            />
           </div>
         )}
       </section>

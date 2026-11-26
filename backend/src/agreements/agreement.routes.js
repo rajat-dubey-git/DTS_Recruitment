@@ -5,6 +5,7 @@ import { requireAdmin, requireAuth } from '../auth/auth.middleware.js'
 import {
   activateAdminAgreement,
   createCustomerAgreementRequest,
+  downloadAdminAgreementSample,
   downloadAdminSignedCopy,
   downloadAdminAgreement,
   downloadCustomerDraft,
@@ -17,6 +18,7 @@ import {
   requestCustomerChanges,
   reviewAdminAgreement,
   updateAdminAgreementTerms,
+  provisionAdminAgreementOrders,
   uploadCustomerSignedCopy,
 } from './agreement.controller.js'
 import { ensurePrivateStorageDirectory } from './document-storage.js'
@@ -85,6 +87,7 @@ router.post(
 )
 
 router.get('/admin', requireAdmin, readAdminAgreements)
+router.get('/admin/sample.pdf', requireAdmin, downloadAdminAgreementSample)
 router.get('/admin/:agreementId', requireAdmin, readAdminAgreement)
 router.put(
   '/admin/:agreementId/versions/:versionId/terms',
@@ -110,6 +113,11 @@ router.post(
   '/admin/:agreementId/versions/:versionId/activate',
   requireAdmin,
   activateAdminAgreement,
+)
+router.post(
+  '/admin/:agreementId/provision-orders',
+  requireAdmin,
+  provisionAdminAgreementOrders,
 )
 
 export default router

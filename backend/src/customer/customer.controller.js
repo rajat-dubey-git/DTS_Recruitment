@@ -1,5 +1,31 @@
 import { pool } from '../config/db.js'
-import PDFDocument from 'pdfkit'
+import { storeInvoiceDocument } from './invoice-document.js'
+import {
+  createNotification,
+  notifyAssignedRecruiters,
+} from '../notifications/notification.service.js'
+import {
+  listCustomerRequirements,
+  submitCustomerRequirementRequest,
+} from '../admin/requirement-intake.service.js'
+
+export async function getCustomerRequirements(req, res, next) {
+  try {
+    return res.json(await listCustomerRequirements(req.authUser.user_id))
+  } catch (error) {
+    return next(error)
+  }
+}
+
+export async function createCustomerRequirement(req, res, next) {
+  try {
+    return res.status(201).json(
+      await submitCustomerRequirementRequest(req.authUser.user_id, req.body),
+    )
+  } catch (error) {
+    return next(error)
+  }
+}
 
 export async function getCustomerSharedCandidates(req, res, next) {
   try {
@@ -87,6 +113,81 @@ async function getCustomerIdForUser(userId) {
   return rows[0]?.customer_id || null
 }
 
+export async function listCustomerJobProfiles(_req, res, next) {
+  try {
+    const [jobProfiles] = await pool.execute(
+      `SELECT job_profile_id, profile_code, profile_name, category,
+              default_experience_min, default_experience_max, status
+       FROM job_profiles
+       WHERE status = 'ACTIVE'
+       ORDER BY profile_name, job_profile_id`,
+    )
+    return res.json({ jobProfiles })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+export async function listCustomerRecruiters(req, res, next) {
+  try {
+    const customerId = await getCustomerIdForUser(req.authUser.user_id)
+    if (!customerId) return res.status(403).json({ message: 'No customer account is linked to this user.' })
+    const [recruiters] = await pool.execute(
+      `SELECT ra.assignment_id, ra.assignment_role, ra.assigned_at,
+              r.requirement_id, r.requirement_number, r.job_title,
+              u.full_name, u.email
+       FROM requirement_assignments ra
+       INNER JOIN users u ON u.user_id = ra.recruiter_id AND u.role = 'RECRUITER'
+       INNER JOIN job_requirements r ON r.requirement_id = ra.requirement_id
+       INNER JOIN service_orders so ON so.service_order_id = r.service_order_id
+       INNER JOIN agreements a ON a.agreement_id = so.agreement_id
+       WHERE a.customer_id = ? AND ra.unassigned_at IS NULL AND u.status = 'ACTIVE'
+       ORDER BY r.created_at DESC, ra.assignment_role, u.full_name`,
+      [customerId],
+    )
+    return res.json({ recruiters })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+export async function listCustomerInterviews(req, res, next) {
+  try {
+    const customerId = await getCustomerIdForUser(req.authUser.user_id)
+    if (!customerId) return res.status(403).json({ message: 'No customer account is linked to this user.' })
+    const [interviews] = await pool.execute(
+      `SELECT i.interview_id, i.round_number, i.interview_type,
+              i.scheduled_start, i.scheduled_end, i.location_or_link, i.status,
+              a.application_number, r.requirement_number, r.job_title,
+              CONCAT_WS(' ', candidate.first_name, candidate.last_name) AS candidate_name,
+              interviewer.full_name AS interviewer_name
+       FROM interviews i
+       INNER JOIN applications a ON a.application_id = i.application_id
+       INNER JOIN candidates candidate ON candidate.candidate_id = a.candidate_id
+       INNER JOIN job_requirements r ON r.requirement_id = a.requirement_id
+       INNER JOIN service_orders so ON so.service_order_id = r.service_order_id
+       INNER JOIN agreements agreement ON agreement.agreement_id = so.agreement_id
+       LEFT JOIN users interviewer ON interviewer.user_id = i.interviewer_user_id
+       WHERE agreement.customer_id = ?
+         AND EXISTS (
+           SELECT 1
+           FROM resume_shares rs
+           INNER JOIN customer_contacts cc ON cc.contact_id = rs.shared_with_contact_id
+           WHERE rs.application_id = a.application_id
+             AND cc.customer_id = agreement.customer_id
+             AND cc.status = 'ACTIVE'
+             AND rs.status IN ('SHARED', 'VIEWED')
+         )
+       ORDER BY i.scheduled_start DESC, i.interview_id DESC
+       LIMIT 250`,
+      [customerId],
+    )
+    return res.json({ interviews })
+  } catch (error) {
+    return next(error)
+  }
+}
+
 export async function listCustomerInvoices(req, res, next) {
   try {
     let customerId = null
@@ -110,6 +211,7 @@ export async function listCustomerInvoices(req, res, next) {
     if (customerId) {
       sql += ' AND c.customer_id = ?'
       params.push(customerId)
+      sql += " AND i.status = 'ISSUED'"
     }
     sql += ' ORDER BY i.invoice_date DESC, i.invoice_id DESC'
     const [invoices] = await pool.execute(sql, params)
@@ -133,7 +235,7 @@ export async function downloadCustomerInvoice(req, res, next) {
     }
 
     let sql = `
-      SELECT i.*, c.company_name
+      SELECT i.*, c.company_name, a.agreement_number, so.order_number
       FROM invoices i
       JOIN service_orders so ON so.service_order_id = i.service_order_id
       JOIN agreements a ON a.agreement_id = so.agreement_id
@@ -144,30 +246,24 @@ export async function downloadCustomerInvoice(req, res, next) {
     if (customerId) {
       sql += ' AND c.customer_id = ?'
       params.push(customerId)
+      sql += " AND i.status = 'ISSUED'"
     }
     const [rows] = await pool.execute(sql, params)
     if (!rows[0]) return res.status(404).json({ message: 'Invoice not found.' })
     const invoice = rows[0]
+    const [items] = await pool.execute(
+      `SELECT description, quantity, unit_price, tax_rate, taxable_value, tax_amount, line_total
+       FROM invoice_items
+       WHERE invoice_id = ?
+       ORDER BY item_id`,
+      [invoiceId],
+    )
 
+    const archivedDocument = await storeInvoiceDocument(invoice, items)
     res.setHeader('Content-Type', 'application/pdf')
-    res.setHeader('Content-Disposition', `attachment; filename="${String(invoice.invoice_number).replace(/[^a-zA-Z0-9._-]/g, '_')}.pdf"`)
-    const document = new PDFDocument({ margin: 48 })
-    document.pipe(res)
-    document.fontSize(20).text('DTS Recruitment', { align: 'right' })
-    document.moveDown()
-    document.fontSize(16).text(`Invoice ${invoice.invoice_number}`)
-    document.moveDown(0.5)
-    document.fontSize(11).text(`Customer: ${invoice.company_name || '—'}`)
-    document.text(`Invoice date: ${invoice.invoice_date}`)
-    document.text(`Due date: ${invoice.due_date}`)
-    document.text(`Status: ${invoice.status}`)
-    document.moveDown()
-    document.text(`Subtotal: ${invoice.subtotal}`)
-    document.text(`Discount: ${invoice.discount_amount}`)
-    document.text(`Tax: ${invoice.tax_total}`)
-    document.moveDown()
-    document.fontSize(14).text(`Total: ${invoice.total_amount}`)
-    document.end()
+    return res.download(archivedDocument.absolutePath, archivedDocument.fileName, (error) => {
+      if (error) next(error)
+    })
   } catch (error) {
     return next(error)
   }
@@ -190,9 +286,14 @@ export async function submitCandidateDecision(req, res, next) {
     const [shares] = await connection.execute(
       `SELECT rs.share_id, rs.status AS share_status, rs.access_expires_at,
               a.application_id, a.status AS application_status,
+              c.user_id AS candidate_user_id, candidate_user.status AS candidate_user_status,
+              r.requirement_id, r.requirement_number, r.job_title,
               cc.customer_id, cc.status AS contact_status
        FROM resume_shares rs
        JOIN applications a ON a.application_id = rs.application_id
+       JOIN candidates c ON c.candidate_id = a.candidate_id
+       LEFT JOIN users candidate_user ON candidate_user.user_id = c.user_id
+       JOIN job_requirements r ON r.requirement_id = a.requirement_id
        JOIN customer_contacts cc ON cc.contact_id = rs.shared_with_contact_id
        WHERE rs.share_id = ?
        FOR UPDATE`,
@@ -251,6 +352,21 @@ export async function submitCandidateDecision(req, res, next) {
         ],
       )
     }
+    if (share.candidate_user_id && share.candidate_user_status === 'ACTIVE') {
+      await createNotification(connection, {
+        userId: share.candidate_user_id,
+        type: 'CUSTOMER_CANDIDATE_DECISION',
+        title: `Customer reviewed your application: ${share.requirement_number}`,
+        message: `The customer marked your application ${decision.toLowerCase()}.`,
+        targetUrl: '/app/candidate/applications',
+      })
+    }
+    await notifyAssignedRecruiters(connection, share.requirement_id, {
+      type: 'CUSTOMER_CANDIDATE_DECISION',
+      title: `Customer decision: ${share.requirement_number}`,
+      message: `A customer marked a shared candidate ${decision.toLowerCase()}.`,
+      targetUrl: '/app/recruiter/applications',
+    })
 
     await connection.commit()
     return res.json({ message: `Candidate successfully marked as ${decision}.`, decision })

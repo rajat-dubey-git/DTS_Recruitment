@@ -8,6 +8,8 @@ import {
   resolvePrivateStoragePath,
   storeSignedPdf,
 } from './document-storage.js'
+import { notifyActiveCustomerContacts } from '../notifications/notification.service.js'
+import { notifyActiveAdmins } from '../notifications/notification.service.js'
 
 const agreementStatus = {
   REVIEW: 'PENDING_ADMIN_REVIEW',
@@ -262,6 +264,12 @@ export async function createCustomerAgreement(user, input) {
        VALUES (?, ?, 'SERVICE_SELECTION_SUBMITTED', ?, ?, 'Service selection submitted for administrator review.')`,
       [agreementId, versionId, agreementStatus.REVIEW, user.user_id],
     )
+    await notifyActiveAdmins(connection, {
+      type: 'AGREEMENT_SUBMITTED',
+      title: `Agreement needs review: ${number}`,
+      message: 'A customer submitted selected services for agreement review.',
+      targetUrl: '/app/admin/agreements',
+    })
     await connection.commit()
     return getCustomerAgreementDetail(user.user_id, agreementId)
   } catch (error) {
@@ -461,6 +469,7 @@ async function getCurrentVersionForUpdate(connection, agreementId, versionId) {
   const [rows] = await connection.execute(
     `SELECT av.agreement_version_id, av.agreement_id, av.version_number, av.status,
             av.created_by, av.draft_document_path, av.signed_document_path,
+            av.signed_uploaded_at,
             a.customer_id, a.agreement_number, a.title, a.effective_date, a.expiry_date,
             c.company_name
      FROM agreement_versions av
@@ -579,7 +588,9 @@ function buildDraftDocument(agreement, version, lines) {
     doc.text(`Employment model: ${line.employment_model.replace(/_/g, ' ')}`)
     doc.text(`Schedule: ${line.employment_schedule.replace(/_/g, ' ')}${line.hours_per_week ? ` (${line.hours_per_week} hours/week)` : ''}`)
     doc.text(`Headcount: ${line.headcount}`)
-    doc.text(`Commercial basis: ${line.fee_type === 'SALARY_MONTHS' ? `${line.fee_value} month(s) of monthly salary` : `${line.fee_value}% of annual CTC`}`)
+    doc.text(`Fee type: ${line.fee_type.replace(/_/g, ' ')}`)
+    doc.text(`Fee basis: ${line.fee_basis.replace(/_/g, ' ')}`)
+    doc.text(`Fee value: ${line.fee_value}${line.currency ? ` ${line.currency}` : ''}`)
     if (line.scope_description) doc.text(`Scope: ${line.scope_description}`)
     doc.moveDown(0.65)
   })
@@ -603,6 +614,31 @@ function buildDraftDocument(agreement, version, lines) {
   doc.text('Name and designation: __________________________________')
   doc.text('Date: ____________________')
   return doc
+}
+
+export function createAgreementSampleDocument() {
+  return buildDraftDocument(
+    {
+      agreement_number: '[Agreement number]',
+      company_name: '[Customer legal name]',
+      effective_date: null,
+      expiry_date: null,
+    },
+    { version_number: 1 },
+    [{
+      service_name: '[Selected service]',
+      profile_name: '[Job profile]',
+      employment_model: '[Employment model]',
+      employment_schedule: '[Schedule]',
+      hours_per_week: null,
+      headcount: '[Headcount]',
+      fee_type: '[Fee type]',
+      fee_basis: '[Fee basis]',
+      fee_value: '[Fee value]',
+      currency: '[Currency]',
+      scope_description: '[Scope, if any]',
+    }],
+  )
 }
 
 export async function requestAdminAgreementDecision(
@@ -663,6 +699,12 @@ export async function requestAdminAgreementDecision(
           internalComment,
         ],
       )
+      await notifyActiveCustomerContacts(connection, Number(version.customer_id), {
+        type: 'AGREEMENT_CHANGES_REQUESTED',
+        title: `Agreement changes requested: ${version.agreement_number}`,
+        message: customerComment,
+        targetUrl: '/app/agreements',
+      })
       await connection.commit()
       return getAdminAgreementDetail(agreementId)
     }
@@ -720,6 +762,12 @@ export async function requestAdminAgreementDecision(
         internalComment,
       ],
     )
+    await notifyActiveCustomerContacts(updateConnection, Number(current.customer_id), {
+      type: 'AGREEMENT_APPROVED_FOR_SIGNATURE',
+      title: `Agreement ready to sign: ${current.agreement_number}`,
+      message: 'The agreement was approved. Download, sign, and upload the signed PDF.',
+      targetUrl: '/app/agreements',
+    })
     await updateConnection.commit()
     return getAdminAgreementDetail(agreementId)
   } catch (error) {
@@ -776,9 +824,6 @@ export async function uploadSignedAgreement(user, agreementIdValue, versionIdVal
       if (!await customerHasAccess(user.user_id, version.customer_id, connection)) {
         throw httpError('You do not have access to this agreement.', 403)
       }
-      if (Number(version.created_by) !== Number(user.user_id)) {
-        throw httpError('Only the customer contact who submitted this selection can upload the signed copy.', 403)
-      }
       if (version.status !== agreementStatus.SIGNATURE) {
         throw httpError('This agreement is not awaiting a signed copy.', 409)
       }
@@ -811,6 +856,12 @@ export async function uploadSignedAgreement(user, agreementIdValue, versionIdVal
           user.user_id,
         ],
       )
+      await notifyActiveAdmins(connection, {
+        type: 'AGREEMENT_SIGNED_COPY_UPLOADED',
+        title: `Signed agreement uploaded: ${version.agreement_number}`,
+        message: 'A signed agreement copy is ready for administrator verification.',
+        targetUrl: `/app/admin/agreements/${agreementId}/review`,
+      })
       await connection.commit()
     } finally {
       connection.release()
@@ -836,9 +887,6 @@ export async function requestCustomerAgreementChanges(user, agreementIdValue, ve
     if (!await customerHasAccess(user.user_id, version.customer_id, connection)) {
       throw httpError('You do not have access to this agreement.', 403)
     }
-    if (Number(version.created_by) !== Number(user.user_id)) {
-      throw httpError('Only the customer contact who submitted this selection can request changes.', 403)
-    }
     if (version.status !== agreementStatus.SIGNATURE) {
       throw httpError('Changes can only be requested while the agreement is awaiting signature.', 409)
     }
@@ -859,6 +907,12 @@ export async function requestCustomerAgreementChanges(user, agreementIdValue, ve
        VALUES (?, ?, 'CUSTOMER_CHANGE_REQUESTED', ?, ?, ?, ?)`,
       [agreementId, versionId, agreementStatus.SIGNATURE, agreementStatus.CHANGES, user.user_id, comment],
     )
+    await notifyActiveAdmins(connection, {
+      type: 'AGREEMENT_CUSTOMER_CHANGES_REQUESTED',
+      title: `Customer requested agreement changes: ${version.agreement_number}`,
+      message: comment,
+      targetUrl: `/app/admin/agreements/${agreementId}/review`,
+    })
     await connection.commit()
     return getCustomerAgreementDetail(user.user_id, agreementId)
   } catch (error) {
@@ -912,6 +966,20 @@ export async function activateSignedAgreement(agreementIdValue, versionIdValue, 
        VALUES (?, ?, 'AGREEMENT_ACTIVATED', ?, ?, ?, 'Signed agreement verified and activated.')`,
       [agreementId, versionId, agreementStatus.ACTIVATION, agreementStatus.ACTIVE, adminUserId],
     )
+    await provisionAgreementServiceOrders(
+      connection,
+      version,
+      versionId,
+      finalEffectiveDate,
+      finalExpiryDate,
+      adminUserId,
+    )
+    await notifyActiveCustomerContacts(connection, Number(version.customer_id), {
+      type: 'AGREEMENT_ACTIVATED',
+      title: `Agreement activated: ${version.agreement_number}`,
+      message: 'Your signed agreement is active. Service orders are ready for new requirements.',
+      targetUrl: '/app/agreements',
+    })
     await connection.commit()
     return getAdminAgreementDetail(agreementId)
   } catch (error) {
@@ -920,6 +988,178 @@ export async function activateSignedAgreement(agreementIdValue, versionIdValue, 
   } finally {
     connection.release()
   }
+}
+
+export async function provisionOrdersForActiveAgreement(agreementIdValue, adminUserId) {
+  const agreementId = positiveId(agreementIdValue, 'Agreement')
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [rows] = await connection.execute(
+      `SELECT av.agreement_version_id, a.agreement_id, a.customer_id,
+              a.agreement_number, a.effective_date, a.expiry_date
+       FROM agreements a
+       INNER JOIN agreement_versions av ON av.agreement_id = a.agreement_id
+       WHERE a.agreement_id = ? AND a.status = 'ACTIVE' AND av.status = 'ACTIVE'
+         AND av.version_number = (
+           SELECT MAX(latest.version_number)
+           FROM agreement_versions latest
+           WHERE latest.agreement_id = a.agreement_id
+         )
+       LIMIT 1
+       FOR UPDATE`,
+      [agreementId],
+    )
+    const activeAgreement = rows[0]
+    if (!activeAgreement) {
+      throw httpError('Only an active agreement with an active version can provision service orders.', 409)
+    }
+
+    const result = await provisionAgreementServiceOrders(
+      connection,
+      activeAgreement,
+      activeAgreement.agreement_version_id,
+      activeAgreement.effective_date,
+      activeAgreement.expiry_date,
+      adminUserId,
+    )
+    if (result.changedCount > 0) {
+      await notifyActiveCustomerContacts(connection, Number(activeAgreement.customer_id), {
+        type: 'AGREEMENT_SERVICES_READY',
+        title: `Services ready: ${activeAgreement.agreement_number}`,
+        message: 'Your active agreement services are now available for requirement requests.',
+        targetUrl: '/app/my-requirements',
+      })
+    }
+    await connection.commit()
+    return {
+      serviceTypeCount: result.serviceTypeCount,
+      changedCount: result.changedCount,
+      message: result.changedCount
+        ? 'Missing service orders were provisioned for the active agreement.'
+        : 'All selected agreement services already have an eligible service order.',
+    }
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
+}
+
+export async function ensureServiceOrdersForActiveAgreements(adminUserId, customerId = null) {
+  const params = []
+  const customerFilter = customerId === null ? '' : 'AND a.customer_id = ?'
+  if (customerId !== null) params.push(customerId)
+  const [agreements] = await pool.execute(
+    `    SELECT DISTINCT a.agreement_id
+     FROM agreements a
+     INNER JOIN agreement_versions av ON av.agreement_id = a.agreement_id
+     WHERE a.status = 'ACTIVE' AND av.status = 'ACTIVE'
+       AND av.version_number = (
+         SELECT MAX(latest.version_number)
+         FROM agreement_versions latest
+         WHERE latest.agreement_id = a.agreement_id
+       )
+       AND EXISTS (
+         SELECT 1
+         FROM agreement_service_lines line
+         WHERE line.agreement_version_id = av.agreement_version_id
+           AND NOT EXISTS (
+             SELECT 1
+             FROM service_orders so
+             WHERE so.agreement_id = a.agreement_id
+               AND so.service_type_id = line.service_type_id
+               AND so.status IN ('APPROVED', 'IN_PROGRESS')
+           )
+       )
+       ${customerFilter}
+     ORDER BY a.agreement_id`,
+    params,
+  )
+
+  for (const agreement of agreements) {
+    await provisionOrdersForActiveAgreement(Number(agreement.agreement_id), adminUserId)
+  }
+}
+
+async function provisionAgreementServiceOrders(
+  connection,
+  agreement,
+  versionId,
+  effectiveDate,
+  expiryDate,
+  adminUserId,
+) {
+  const [services] = await connection.execute(
+    `SELECT st.service_type_id, st.service_code, st.service_name,
+            GROUP_CONCAT(DISTINCT jp.profile_name ORDER BY jp.profile_name SEPARATOR ', ') AS profiles
+     FROM agreement_service_lines line
+     INNER JOIN service_types st ON st.service_type_id = line.service_type_id
+     INNER JOIN job_profiles jp ON jp.job_profile_id = line.job_profile_id
+     WHERE line.agreement_version_id = ?
+     GROUP BY st.service_type_id, st.service_code, st.service_name
+     ORDER BY st.service_name, st.service_type_id`,
+    [versionId],
+  )
+  if (!services.length) {
+    throw httpError('This agreement has no selected services to activate.', 409)
+  }
+
+  let changedCount = 0
+  for (const service of services) {
+    const [existing] = await connection.execute(
+      `SELECT service_order_id
+       FROM service_orders
+       WHERE agreement_id = ? AND service_type_id = ?
+         AND status IN ('APPROVED', 'IN_PROGRESS')
+       LIMIT 1
+       FOR UPDATE`,
+      [agreement.agreement_id, service.service_type_id],
+    )
+    if (existing[0]) continue
+
+    const [pending] = await connection.execute(
+      `SELECT service_order_id
+       FROM service_orders
+       WHERE agreement_id = ? AND service_type_id = ?
+         AND status = 'PENDING_APPROVAL'
+       ORDER BY service_order_id DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [agreement.agreement_id, service.service_type_id],
+    )
+    if (pending[0]) {
+      await connection.execute(
+        `UPDATE service_orders
+         SET status = 'APPROVED', approved_by = ?, approved_at = CURRENT_TIMESTAMP
+         WHERE service_order_id = ?`,
+        [adminUserId, pending[0].service_order_id],
+      )
+      changedCount += 1
+      continue
+    }
+
+    const orderNumber = `SO-${agreement.agreement_id}-${versionId}-${service.service_type_id}`
+    await connection.execute(
+      `INSERT INTO service_orders
+        (order_number, agreement_id, service_type_id, title, scope_description,
+         start_date, end_date, status, approved_by, approved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'APPROVED', ?, CURRENT_TIMESTAMP)`,
+      [
+        orderNumber,
+        agreement.agreement_id,
+        service.service_type_id,
+        `${service.service_name} - ${agreement.agreement_number}`,
+        `Covered profiles: ${service.profiles}. Provisioned when agreement ${agreement.agreement_number} was activated.`,
+        effectiveDate,
+        expiryDate,
+        adminUserId,
+      ],
+    )
+    changedCount += 1
+  }
+  return { serviceTypeCount: services.length, changedCount }
 }
 
 export async function getPendingSignedDocument(agreementIdValue, versionIdValue) {

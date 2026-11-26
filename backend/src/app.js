@@ -12,6 +12,7 @@ import recruiterRoutes from './recruiter/recruiter.routes.js'
 import customerRoutes from './customer/customer.routes.js'
 import documentRoutes from './documents/document.routes.js'
 import candidateRoutes from './candidate/candidate.routes.js'
+import notificationRoutes from './notifications/notification.routes.js'
 
 const app = express()
 const allowedOrigins = (process.env.CORS_ORIGIN || '')
@@ -25,7 +26,7 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) {
       return callback(null, true)
     }
-    return callback(new Error('Origin is not allowed by CORS.'))
+    return callback(Object.assign(new Error('Origin is not allowed by CORS.'), { statusCode: 403 }))
   },
   credentials: true,
 }))
@@ -41,6 +42,7 @@ app.use('/api/customer', customerRoutes)
 app.use('/api/documents', documentRoutes)
 app.use('/api/admin', adminRoutes)
 app.use('/api/candidate', candidateRoutes)
+app.use('/api/notifications', notificationRoutes)
 app.use('/api/auth/invitations', invitationRoutes)
 app.use('/api/public', requirementIntakeRoutes)
 
@@ -63,14 +65,21 @@ app.use((error, _req, res, next) => {
   }
   const databaseError = databaseErrors[error.code]
   const isMulterError = error.name === 'MulterError'
+  const isInvalidJson = error.type === 'entity.parse.failed'
+  const isPayloadTooLarge = error.type === 'entity.too.large'
   const status = error.statusCode
-    ?? (isMulterError ? (error.code === 'LIMIT_FILE_SIZE' ? 413 : 400) : databaseError?.status)
+    ?? (isMulterError || isInvalidJson ? (error.code === 'LIMIT_FILE_SIZE' ? 413 : 400)
+      : isPayloadTooLarge ? 413 : databaseError?.status)
     ?? 500
 
   if (status >= 500) console.error(error)
   res.status(status).json({
     message: error.statusCode
       ? error.message
+      : isInvalidJson
+        ? 'Request body must be valid JSON.'
+      : isPayloadTooLarge
+        ? 'Request body exceeds the allowed size.'
       : isMulterError
         ? (error.code === 'LIMIT_FILE_SIZE' ? 'PDF must not exceed 50 MB.' : 'Unable to process the uploaded file.')
       : databaseError?.message ?? 'Internal server error.',

@@ -8,6 +8,7 @@ import {
   CreditCard,
   Building2,
   FileText,
+  FileCheck2,
 } from 'lucide-react'
 
 import type { LucideIcon } from 'lucide-react'
@@ -30,12 +31,14 @@ export const navByRole: Record<Role, NavItem[]> = {
     { label: 'Users', icon: Users, path: '/app/admin/users' },
     { label: 'Requirements', icon: ClipboardList, path: '/app/admin/requirements' },
     { label: 'Candidates', icon: Users, path: '/app/admin/candidates' },
+    { label: 'Offer letters', icon: FileCheck2, path: '/app/admin/offers' },
     { label: 'Job Profiles', icon: BriefcaseBusiness, path: '/app/admin/job-profiles' },
     { label: 'Skills', icon: BriefcaseBusiness, path: '/app/admin/skills' },
     { label: 'Service Types', icon: ClipboardList, path: '/app/admin/service-types' },
     { label: 'Agreements', icon: FileText, path: '/app/admin/agreements' },
     { label: 'Rate Cards', icon: CreditCard, path: '/app/admin/rate-cards' },
     { label: 'Service Orders', icon: ClipboardList, path: '/app/admin/service-orders' },
+    { label: 'Invoices', icon: CreditCard, path: '/app/admin/invoices' },
     { label: 'Customer Requests', icon: ClipboardList, path: '/app/admin/requirement-intakes' },
     { label: 'Recruiting Operations', icon: Users, path: '/app/assigned-requirements' },
   ],
@@ -64,5 +67,6 @@ export const navByRole: Record<Role, NavItem[]> = {
     { label: 'Resume', icon: FileText, path: '/app/candidate/resume' },
     { label: 'Open Requirements', icon: ClipboardList, path: '/app/candidate/requirements' },
     { label: 'Applications', icon: BriefcaseBusiness, path: '/app/candidate/applications' },
+    { label: 'Offer letters', icon: FileCheck2, path: '/app/candidate/offers' },
   ],
 }

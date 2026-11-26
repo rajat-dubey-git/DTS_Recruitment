@@ -1,5 +1,6 @@
 import {
   activateSignedAgreement,
+  createAgreementSampleDocument,
   createCustomerAgreement,
   getAdminAgreementDetail,
   getAdminCatalog,
@@ -9,6 +10,7 @@ import {
   getPendingSignedDocument,
   listAdminAgreements,
   listCustomerAgreements,
+  provisionOrdersForActiveAgreement,
   requestAdminAgreementDecision,
   requestCustomerAgreementChanges,
   saveAdminAgreementTerms,
@@ -65,6 +67,19 @@ export async function readAdminAgreements(_req, res, next) {
   }
 }
 
+export function downloadAdminAgreementSample(_req, res, next) {
+  try {
+    const document = createAgreementSampleDocument()
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', 'inline; filename="agreement-sample.pdf"')
+    document.on('error', next)
+    document.pipe(res)
+    document.end()
+  } catch (error) {
+    return next(error)
+  }
+}
+
 export async function readAdminAgreement(req, res, next) {
   try {
     return res.json(await getAdminAgreementDetail(req.params.agreementId))
@@ -110,6 +125,17 @@ export async function activateAdminAgreement(req, res, next) {
       req.authUser.user_id,
     )
     return res.json(agreement)
+  } catch (error) {
+    return next(error)
+  }
+}
+
+export async function provisionAdminAgreementOrders(req, res, next) {
+  try {
+    return res.json(await provisionOrdersForActiveAgreement(
+      req.params.agreementId,
+      req.authUser.user_id,
+    ))
   } catch (error) {
     return next(error)
   }

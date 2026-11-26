@@ -52,7 +52,7 @@ export default function AdminRequirementCreateDialog({ onClose, onSaved }: Props
         <div className="customer-modal-heading">
           <div>
             <h2 id="admin-requirement-title">Add customer requirement</h2>
-            <p>Requirements start as pending approval and must use an active profile and approved service order.</p>
+            <p>Requirements start as pending approval. Enter a custom title and skills, then select a job profile category and approved service order.</p>
           </div>
           <button type="button" className="customer-modal-close" onClick={onClose} aria-label="Close">×</button>
         </div>
@@ -75,7 +75,7 @@ export default function AdminRequirementCreateDialog({ onClose, onSaved }: Props
               </select>
             </label>
             <label>
-              Active job profile *
+              Job profile category *
               <select name="jobProfileId" required defaultValue="">
                 <option value="">Select a job profile…</option>
                 {options.jobProfiles.map((profile) => (
@@ -85,7 +85,11 @@ export default function AdminRequirementCreateDialog({ onClose, onSaved }: Props
                 ))}
               </select>
             </label>
-            <label>Job title *<input name="jobTitle" maxLength={150} required /></label>
+            <label>Custom job title *<input name="jobTitle" maxLength={150} required /></label>
+            <label>
+              Required skills (separate with commas or new lines)
+              <textarea name="skills" rows={2} />
+            </label>
             <label>Job description and responsibilities *<textarea name="jobDescription" maxLength={60000} rows={4} required /></label>
             <div className="public-intake-grid">
               <label>Headcount *<input name="headcount" type="number" min={1} max={65535} step={1} required /></label>

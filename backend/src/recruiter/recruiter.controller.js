@@ -3,6 +3,10 @@ import { stat } from 'node:fs/promises'
 import { pool } from '../config/db.js'
 import { resolvePrivateStoragePath } from '../agreements/document-storage.js'
 import { randomUUID } from 'node:crypto'
+import {
+  createNotification,
+  notifyActiveCustomerContacts,
+} from '../notifications/notification.service.js'
 
 function httpError(statusCode, message) {
   return Object.assign(new Error(message), { statusCode })
@@ -211,6 +215,7 @@ export async function getRecruiterApplications(req, res, next) {
     const [applications] = await pool.execute(
       `SELECT a.application_id, a.application_number, a.status, a.applied_at,
               a.requirement_id, a.candidate_id,
+              s.selection_id,
               CONCAT_WS(' ', candidate.first_name, candidate.last_name) AS candidate_name,
               candidate.email AS candidate_email,
               candidate.mobile AS candidate_mobile,
@@ -223,6 +228,7 @@ export async function getRecruiterApplications(req, res, next) {
        INNER JOIN service_orders so ON so.service_order_id = r.service_order_id
        INNER JOIN agreements agreement ON agreement.agreement_id = so.agreement_id
        INNER JOIN customers customer ON customer.customer_id = agreement.customer_id
+       LEFT JOIN selections s ON s.application_id = a.application_id
        LEFT JOIN users recruiter ON recruiter.user_id = a.recruiter_id
        WHERE ${scope.sql} ${searchSql}
        ORDER BY a.applied_at DESC, a.application_id DESC
@@ -262,15 +268,32 @@ export async function updateRecruiterApplicationStatus(req, res, next) {
     await connection.beginTransaction()
     const scope = applicationScope(req)
     const [applications] = await connection.execute(
-      `SELECT a.status
+      `SELECT a.status, c.user_id AS candidate_user_id,
+              candidate_user.status AS candidate_user_status,
+              r.requirement_id, r.requirement_number, r.job_title, agreement.customer_id,
+              EXISTS (
+                SELECT 1
+                FROM resume_shares rs
+                INNER JOIN customer_contacts cc ON cc.contact_id = rs.shared_with_contact_id
+                WHERE rs.application_id = a.application_id
+                  AND cc.customer_id = agreement.customer_id
+                  AND cc.status = 'ACTIVE'
+                  AND rs.status IN ('SHARED', 'VIEWED')
+              ) AS is_shared
        FROM applications a
+       INNER JOIN candidates c ON c.candidate_id = a.candidate_id
+       LEFT JOIN users candidate_user ON candidate_user.user_id = c.user_id
+       INNER JOIN job_requirements r ON r.requirement_id = a.requirement_id
+       INNER JOIN service_orders so ON so.service_order_id = r.service_order_id
+       INNER JOIN agreements agreement ON agreement.agreement_id = so.agreement_id
        WHERE a.application_id = ? AND ${scope.sql}
        FOR UPDATE`,
       [applicationId, ...scope.values],
     )
     if (!applications[0]) throw httpError(404, 'Application not found or not assigned to you.')
 
-    const currentStatus = applications[0].status
+    const application = applications[0]
+    const currentStatus = application.status
     if (!transitions[currentStatus]?.includes(nextStatus)) {
       throw httpError(409, `An application cannot move from ${currentStatus} to ${nextStatus}.`)
     }
@@ -285,6 +308,35 @@ export async function updateRecruiterApplicationStatus(req, res, next) {
        VALUES (?, ?, ?, ?, ?)`,
       [applicationId, currentStatus, nextStatus, req.authUser.user_id, reason || null],
     )
+    if (nextStatus === 'SELECTED') {
+      const [selection] = await connection.execute(
+        `INSERT INTO selections (application_id, selected_by, notes)
+         VALUES (?, ?, ?)`,
+        [applicationId, req.authUser.user_id, reason || null],
+      )
+      await connection.execute(
+        `INSERT INTO placements (selection_id, outcome)
+         VALUES (?, 'PENDING')`,
+        [selection.insertId],
+      )
+    }
+    if (application.candidate_user_id && application.candidate_user_status === 'ACTIVE') {
+      await createNotification(connection, {
+        userId: application.candidate_user_id,
+        type: 'APPLICATION_STATUS_CHANGED',
+        title: `Application ${nextStatus.toLowerCase()}: ${application.requirement_number}`,
+        message: `Your application for ${application.job_title} changed to ${nextStatus.replace(/_/g, ' ')}.`,
+        targetUrl: '/app/candidate/applications',
+      })
+    }
+    if (Number(application.is_shared) === 1) {
+      await notifyActiveCustomerContacts(connection, Number(application.customer_id), {
+        type: 'APPLICATION_STATUS_CHANGED',
+        title: `Candidate status updated: ${application.requirement_number}`,
+        message: `A shared candidate for ${application.job_title} changed to ${nextStatus.replace(/_/g, ' ')}.`,
+        targetUrl: '/app/candidates',
+      })
+    }
     await connection.commit()
     return res.json({ message: 'Application status updated.', status: nextStatus })
   } catch (error) {
@@ -354,8 +406,24 @@ export async function scheduleRecruiterInterview(req, res, next) {
     const scope = applicationScope(req)
     await connection.beginTransaction()
     const [applications] = await connection.execute(
-      `SELECT a.application_id, a.status
+      `SELECT a.application_id, a.status, c.user_id AS candidate_user_id,
+              candidate_user.status AS candidate_user_status,
+              r.requirement_id, r.requirement_number, r.job_title, agreement.customer_id,
+              EXISTS (
+                SELECT 1
+                FROM resume_shares rs
+                INNER JOIN customer_contacts cc ON cc.contact_id = rs.shared_with_contact_id
+                WHERE rs.application_id = a.application_id
+                  AND cc.customer_id = agreement.customer_id
+                  AND cc.status = 'ACTIVE'
+                  AND rs.status IN ('SHARED', 'VIEWED')
+              ) AS is_shared
        FROM applications a
+       INNER JOIN candidates c ON c.candidate_id = a.candidate_id
+       LEFT JOIN users candidate_user ON candidate_user.user_id = c.user_id
+       INNER JOIN job_requirements r ON r.requirement_id = a.requirement_id
+       INNER JOIN service_orders so ON so.service_order_id = r.service_order_id
+       INNER JOIN agreements agreement ON agreement.agreement_id = so.agreement_id
        WHERE a.application_id = ? AND ${scope.sql}
        LIMIT 1
        FOR UPDATE`,
@@ -386,8 +454,100 @@ export async function scheduleRecruiterInterview(req, res, next) {
         req.authUser.user_id,
       ],
     )
+    if (applications[0].candidate_user_id && applications[0].candidate_user_status === 'ACTIVE') {
+      await createNotification(connection, {
+        userId: applications[0].candidate_user_id,
+        type: 'INTERVIEW_SCHEDULED',
+        title: `Interview scheduled: ${applications[0].job_title}`,
+        message: `Your interview is scheduled for ${scheduledStart.replace('T', ' ')}.`,
+        targetUrl: '/app/candidate/applications',
+      })
+    }
+    if (Number(applications[0].is_shared) === 1) {
+      await notifyActiveCustomerContacts(connection, Number(applications[0].customer_id), {
+        type: 'INTERVIEW_SCHEDULED',
+        title: `Interview scheduled: ${applications[0].requirement_number}`,
+        message: `An interview for ${applications[0].job_title} was scheduled.`,
+        targetUrl: '/app/interviews',
+      })
+    }
     await connection.commit()
     return res.status(201).json({ interviewId: result.insertId, message: 'Interview scheduled.' })
+  } catch (error) {
+    await connection.rollback()
+    return next(error)
+  } finally {
+    connection.release()
+  }
+}
+
+export async function updateRecruiterInterviewStatus(req, res, next) {
+  const connection = await pool.getConnection()
+  try {
+    const interviewId = Number(req.params.interviewId)
+    const status = req.body?.status
+    if (!Number.isSafeInteger(interviewId) || interviewId < 1) {
+      throw httpError(400, 'Invalid interview ID.')
+    }
+    if (!['COMPLETED', 'CANCELLED', 'NO_SHOW'].includes(status)) {
+      throw httpError(400, 'Select a valid interview outcome.')
+    }
+
+    await connection.beginTransaction()
+    const scope = applicationScope(req)
+    const [interviews] = await connection.execute(
+      `SELECT i.status, a.candidate_id, c.user_id AS candidate_user_id,
+              candidate_user.status AS candidate_user_status,
+              r.requirement_id, r.requirement_number, r.job_title, agreement.customer_id,
+              EXISTS (
+                SELECT 1
+                FROM resume_shares rs
+                INNER JOIN customer_contacts cc ON cc.contact_id = rs.shared_with_contact_id
+                WHERE rs.application_id = a.application_id
+                  AND cc.customer_id = agreement.customer_id
+                  AND cc.status = 'ACTIVE'
+                  AND rs.status IN ('SHARED', 'VIEWED')
+              ) AS is_shared
+       FROM interviews i
+       INNER JOIN applications a ON a.application_id = i.application_id
+       INNER JOIN candidates c ON c.candidate_id = a.candidate_id
+       LEFT JOIN users candidate_user ON candidate_user.user_id = c.user_id
+       INNER JOIN job_requirements r ON r.requirement_id = a.requirement_id
+       INNER JOIN service_orders so ON so.service_order_id = r.service_order_id
+       INNER JOIN agreements agreement ON agreement.agreement_id = so.agreement_id
+       WHERE i.interview_id = ? AND ${scope.sql}
+       LIMIT 1
+       FOR UPDATE`,
+      [interviewId, ...scope.values],
+    )
+    if (!interviews[0]) throw httpError(404, 'Interview not found or not assigned to you.')
+    if (interviews[0].status !== 'SCHEDULED') {
+      throw httpError(409, 'Only scheduled interviews can be updated.')
+    }
+
+    await connection.execute(
+      'UPDATE interviews SET status = ? WHERE interview_id = ?',
+      [status, interviewId],
+    )
+    if (interviews[0].candidate_user_id && interviews[0].candidate_user_status === 'ACTIVE') {
+      await createNotification(connection, {
+        userId: interviews[0].candidate_user_id,
+        type: 'INTERVIEW_STATUS_CHANGED',
+        title: `Interview ${status.toLowerCase()}: ${interviews[0].job_title}`,
+        message: `Your interview outcome was recorded as ${status.replace(/_/g, ' ')}.`,
+        targetUrl: '/app/candidate/applications',
+      })
+    }
+    if (Number(interviews[0].is_shared) === 1) {
+      await notifyActiveCustomerContacts(connection, Number(interviews[0].customer_id), {
+        type: 'INTERVIEW_STATUS_CHANGED',
+        title: `Interview ${status.toLowerCase()}: ${interviews[0].requirement_number}`,
+        message: `The interview for ${interviews[0].job_title} was marked ${status.replace(/_/g, ' ')}.`,
+        targetUrl: '/app/interviews',
+      })
+    }
+    await connection.commit()
+    return res.json({ message: 'Interview outcome recorded.', status })
   } catch (error) {
     await connection.rollback()
     return next(error)
@@ -995,7 +1155,7 @@ export async function createSecureResumeShare(req, res, next) {
     if (!consents[0]) throw httpError(409, 'Active candidate consent is required before sharing a resume.')
 
     const [contacts] = await connection.execute(
-      `SELECT cc.contact_id
+      `SELECT cc.contact_id, cc.user_id
        FROM customer_contacts cc
        INNER JOIN users u ON u.user_id = cc.user_id
        WHERE cc.customer_id = ? AND cc.status = 'ACTIVE'
@@ -1033,6 +1193,12 @@ export async function createSecureResumeShare(req, res, next) {
        VALUES (?, 'CREATED', ?)`,
       [shareId, req.authUser.user_id],
     )
+    await notifyActiveCustomerContacts(connection, Number(appData.customer_id), {
+      type: 'CANDIDATE_SHARED',
+      title: 'Candidate profile shared',
+      message: 'A recruiter shared a candidate profile and verified resume with your organization.',
+      targetUrl: '/app/candidates',
+    })
 
     await connection.commit()
 

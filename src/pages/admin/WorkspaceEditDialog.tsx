@@ -129,6 +129,11 @@ export default function WorkspaceEditDialog({ module, record, onClose, onSaved }
           {/* USERS & RECRUITERS */}
           {(module === 'users' || module === 'recruiters') && (
             <>
+              {module === 'users' && formData.role === 'CANDIDATE' && (
+                <p className="database-read-only" role="note">
+                  Candidate profiles are linked or created when this account is saved. A valid mobile number is required if no profile exists yet.
+                </p>
+              )}
               <label>
                 Full Name *
                 <input
@@ -139,11 +144,14 @@ export default function WorkspaceEditDialog({ module, record, onClose, onSaved }
                 />
               </label>
               <label>
-                Mobile Number
+                Mobile Number{formData.role === 'CANDIDATE' ? ' *' : ''}
                 <input
                   value={String(formData.mobile ?? '')}
                   onChange={(e) => updateField('mobile', e.target.value)}
-                  maxLength={20}
+                  maxLength={15}
+                  required={formData.role === 'CANDIDATE'}
+                  pattern="[+]?[0-9]{7,15}"
+                  title="Enter 7 to 15 digits, optionally starting with +."
                 />
               </label>
               <label>
@@ -169,7 +177,7 @@ export default function WorkspaceEditDialog({ module, record, onClose, onSaved }
                   <option value="INVITED">Invited</option>
                   <option value="ACTIVE">Active</option>
                   <option value="INACTIVE">Inactive</option>
-                  <option value="SUSPENDED">Suspended</option>
+                  <option value="LOCKED">Locked</option>
                 </select>
               </label>
             </>
@@ -308,18 +316,9 @@ export default function WorkspaceEditDialog({ module, record, onClose, onSaved }
                 />
               </label>
               <label>
-                Status *
-                <select
-                  value={String(formData.status ?? 'DRAFT')}
-                  onChange={(e) => updateField('status', e.target.value)}
-                  required
-                >
-                  <option value="DRAFT">Draft</option>
-                  <option value="PENDING_SIGNATURE">Pending Signature</option>
-                  <option value="ACTIVE">Active</option>
-                  <option value="EXPIRED">Expired</option>
-                  <option value="TERMINATED">Terminated</option>
-                </select>
+                Workflow status
+                <input value={String(formData.status ?? 'DRAFT').replace(/_/g, ' ')} readOnly />
+                <small>Agreement status is controlled by the review, signature, and activation workflow.</small>
               </label>
               <label>
                 Effective Date

@@ -1,6 +1,11 @@
 import { Router } from 'express'
 import { requireAuth } from '../auth/auth.middleware.js'
 import {
+  getCustomerRequirements,
+  createCustomerRequirement,
+  listCustomerJobProfiles,
+  listCustomerRecruiters,
+  listCustomerInterviews,
   getCustomerSharedCandidates,
   submitCandidateDecision,
   listCustomerInvoices,
@@ -19,6 +24,11 @@ router.use((req, res, next) => {
   next()
 })
 
+router.get('/requirements', getCustomerRequirements)
+router.post('/requirements', createCustomerRequirement)
+router.get('/job-profiles', listCustomerJobProfiles)
+router.get('/recruiters', listCustomerRecruiters)
+router.get('/interviews', listCustomerInterviews)
 router.get('/candidates', getCustomerSharedCandidates)
 router.post('/candidates/:shareId/decision', submitCandidateDecision)
 router.get('/invoices', listCustomerInvoices)

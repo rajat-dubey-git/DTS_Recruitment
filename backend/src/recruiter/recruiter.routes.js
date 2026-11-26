@@ -12,8 +12,11 @@ import {
   getRecruiterApplications,
   getRecruiterInterviews,
   scheduleRecruiterInterview,
+  updateRecruiterInterviewStatus,
   updateRecruiterApplicationStatus,
 } from './recruiter.controller.js'
+import { createRecruiterOffer } from '../offers/offer.controller.js'
+import { offerPdfUpload } from '../offers/offer.upload.js'
 
 const router = Router()
 
@@ -32,8 +35,10 @@ router.get('/requirements', getRecruiterRequirements)
 router.get('/requirements/:requirementId/submissions', getRequirementSubmissions)
 router.get('/applications', getRecruiterApplications)
 router.patch('/applications/:applicationId/status', updateRecruiterApplicationStatus)
+router.post('/selections/:selectionId/offers', offerPdfUpload, createRecruiterOffer)
 router.get('/interviews', getRecruiterInterviews)
 router.post('/interviews', scheduleRecruiterInterview)
+router.patch('/interviews/:interviewId/status', updateRecruiterInterviewStatus)
 router.get('/candidates', searchCandidates)
 router.get('/candidates/:candidateId', getRecruiterCandidateDetails)
 router.get('/candidates/:candidateId/resume', streamRecruiterCandidateResume)

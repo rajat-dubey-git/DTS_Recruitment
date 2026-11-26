@@ -1,64 +1,25 @@
 import { useEffect, useState } from 'react'
 import { Search } from 'lucide-react'
 import { workspaceApi } from '../api/workspace'
-
-interface JobProfileItem {
-  job_profile_id: number
-  profile_code: string
-  profile_name: string
-  category: string
-  default_experience_min: number
-  default_experience_max: number
-  status: string
-}
-
-const SAMPLE_JOB_PROFILES: JobProfileItem[] = [
-  {
-    job_profile_id: 1,
-    profile_code: 'JP-DEV-001',
-    profile_name: 'Full Stack Developer (React / Node.js)',
-    category: 'Software Engineering',
-    default_experience_min: 3,
-    default_experience_max: 6,
-    status: 'ACTIVE',
-  },
-  {
-    job_profile_id: 2,
-    profile_code: 'JP-DATA-002',
-    profile_name: 'Data Analyst (SQL & Power BI)',
-    category: 'Data & Analytics',
-    default_experience_min: 2,
-    default_experience_max: 5,
-    status: 'ACTIVE',
-  },
-  {
-    job_profile_id: 3,
-    profile_code: 'JP-QA-003',
-    profile_name: 'QA Automation Engineer',
-    category: 'Quality Assurance',
-    default_experience_min: 2,
-    default_experience_max: 4,
-    status: 'ACTIVE',
-  },
-]
+import type { CustomerJobProfile } from '../api/workspace'
+import PaginationControls, { useListPagination } from '../components/PaginationControls'
 
 export default function CustomerJobProfilesPage() {
-  const [profiles, setProfiles] = useState<JobProfileItem[]>([])
+  const [profiles, setProfiles] = useState<CustomerJobProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [error, setError] = useState('')
 
   useEffect(() => {
     let active = true
     setLoading(true)
 
-    workspaceApi.list('job-profiles', { limit: 50, offset: 0, search: '' })
-      .then((page) => {
+    workspaceApi.listCustomerJobProfiles()
+      .then((jobProfiles) => {
         if (!active) return
-        const rows = (page.rows ?? []) as unknown as JobProfileItem[]
-        setProfiles(rows.length > 0 ? rows : SAMPLE_JOB_PROFILES)
-      })
-      .catch(() => {
-        if (active) setProfiles(SAMPLE_JOB_PROFILES)
+        setProfiles(jobProfiles)
+      }).catch((loadError: unknown) => {
+        if (active) setError(loadError instanceof Error ? loadError.message : 'Unable to load job profiles.')
       })
       .finally(() => {
         if (active) setLoading(false)
@@ -75,6 +36,7 @@ export default function CustomerJobProfilesPage() {
     (profile.profile_name?.toLowerCase()?.includes(query) ?? false) ||
     (profile.category?.toLowerCase()?.includes(query) ?? false)
   )
+  const profilePage = useListPagination(filteredProfiles, search)
 
   return (
     <div className="dashboard">
@@ -86,6 +48,7 @@ export default function CustomerJobProfilesPage() {
         </div>
       </div>
 
+      {error && <div className="form-error" role="alert">{error}</div>}
       <section className="panel customer-table-panel">
         <div className="customer-toolbar" style={{ flexWrap: 'wrap', gap: '1rem' }}>
           <div>
@@ -116,7 +79,7 @@ export default function CustomerJobProfilesPage() {
               </tr>
             </thead>
             <tbody>
-              {!loading && filteredProfiles.map((profile, index) => (
+              {!loading && profilePage.items.map((profile, index) => (
                 <tr key={profile.job_profile_id ?? profile.profile_code ?? index}>
                   <td>{profile.profile_code ?? '—'}</td>
                   <td>{profile.profile_name ?? '—'}</td>
@@ -127,12 +90,12 @@ export default function CustomerJobProfilesPage() {
                 </tr>
               ))}
 
-              {!loading && filteredProfiles.length === 0 && (
+              {!loading && !error && filteredProfiles.length === 0 && (
                 <tr>
                   <td colSpan={6}>
                     <div className="customer-empty">
                       <strong>No job profiles found</strong>
-                      <span>Try adjusting your search filter.</span>
+                      <span>{profiles.length === 0 ? 'No active profiles are currently available.' : 'Try adjusting your search filter.'}</span>
                     </div>
                   </td>
                 </tr>
@@ -150,6 +113,14 @@ export default function CustomerJobProfilesPage() {
             </tbody>
           </table>
         </div>
+        {!loading && (
+          <PaginationControls
+            page={profilePage.page}
+            pageCount={profilePage.pageCount}
+            total={profilePage.total}
+            onPageChange={profilePage.setPage}
+          />
+        )}
       </section>
     </div>
   )

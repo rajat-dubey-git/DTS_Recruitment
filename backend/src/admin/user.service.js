@@ -2,6 +2,7 @@ import { randomBytes, createHash } from 'node:crypto'
 import bcrypt from 'bcryptjs'
 import { pool } from '../config/db.js'
 import { isEmailConfigured, sendInvitationEmail } from '../services/email.service.js'
+import { ensureCandidateProfile } from '../candidate/account-link.service.js'
 
 const ALLOWED_ROLES = new Set(['RECRUITER', 'CUSTOMER', 'CANDIDATE'])
 
@@ -68,6 +69,10 @@ function validateUserInput(input) {
 
   if (role === 'CUSTOMER' && (!Number.isSafeInteger(customerId) || customerId < 1)) {
     throw Object.assign(new Error('Select a valid customer organisation for a CUSTOMER user.'), { statusCode: 400 })
+  }
+
+  if (role === 'CANDIDATE' && !mobile) {
+    throw Object.assign(new Error('A mobile number is required for a candidate account.'), { statusCode: 400 })
   }
 
   if (role !== 'CUSTOMER' && customerId !== null) {
@@ -155,6 +160,16 @@ export async function inviteUser(input, createdBy) {
       userId = insertResult.insertId
     }
 
+    if (role === 'CANDIDATE') {
+      await ensureCandidateProfile(connection, {
+        user_id: userId,
+        full_name: fullName,
+        email,
+        mobile,
+        role,
+      })
+    }
+
     if (role === 'CUSTOMER') {
       const [contacts] = await connection.execute(
         'SELECT customer_id FROM customer_contacts WHERE user_id = ? LIMIT 1',
@@ -232,6 +247,121 @@ export async function inviteUser(input, createdBy) {
     user,
     ...(emailConfigured ? {} : { invitationUrl: invitationUrl.toString() }),
     expiresAt,
+  }
+}
+
+export async function deleteUserAccount(userId, actorUserId, database = pool) {
+  const parsedUserId = Number(userId)
+  if (!Number.isSafeInteger(parsedUserId) || parsedUserId < 1) {
+    throw Object.assign(new Error('Invalid user ID.'), { statusCode: 400 })
+  }
+  if (parsedUserId === actorUserId) {
+    throw Object.assign(new Error('You cannot delete your own account.'), { statusCode: 409 })
+  }
+
+  const connection = await database.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [users] = await connection.execute(
+      'SELECT user_id, role, status FROM users WHERE user_id = ? LIMIT 1 FOR UPDATE',
+      [parsedUserId],
+    )
+    const user = users[0]
+    if (!user) throw Object.assign(new Error('User not found.'), { statusCode: 404 })
+
+    if (user.role === 'ADMIN' && user.status === 'ACTIVE') {
+      const [activeAdmins] = await connection.execute(
+        `SELECT user_id
+         FROM users
+         WHERE role = 'ADMIN' AND status = 'ACTIVE'
+         FOR UPDATE`,
+      )
+      if (activeAdmins.length <= 1) {
+        throw Object.assign(new Error('The last active admin account cannot be deleted.'), { statusCode: 409 })
+      }
+    }
+
+    await connection.execute('DELETE FROM user_invitations WHERE user_id = ?', [parsedUserId])
+    await connection.execute('DELETE FROM password_reset_tokens WHERE user_id = ?', [parsedUserId])
+    await connection.execute('DELETE FROM user_sessions WHERE user_id = ?', [parsedUserId])
+    await connection.execute('DELETE FROM notifications WHERE user_id = ?', [parsedUserId])
+
+    await connection.execute('UPDATE customers SET account_owner_id = NULL WHERE account_owner_id = ?', [parsedUserId])
+    await connection.execute('UPDATE customer_contacts SET user_id = NULL WHERE user_id = ?', [parsedUserId])
+    await connection.execute('UPDATE job_profiles SET created_by = NULL WHERE created_by = ?', [parsedUserId])
+    await connection.execute('UPDATE agreements SET created_by = NULL WHERE created_by = ?', [parsedUserId])
+    await connection.execute(
+      'UPDATE service_orders SET approved_by = NULL WHERE approved_by = ?',
+      [parsedUserId],
+    )
+    await connection.execute(
+      `UPDATE job_requirements
+       SET raised_by_user_id = IF(raised_by_user_id = ?, NULL, raised_by_user_id),
+           approved_by = IF(approved_by = ?, NULL, approved_by)
+       WHERE raised_by_user_id = ? OR approved_by = ?`,
+      [parsedUserId, parsedUserId, parsedUserId, parsedUserId],
+    )
+    await connection.execute(
+      `UPDATE requirement_assignments
+       SET unassigned_at = COALESCE(unassigned_at, GREATEST(CURRENT_TIMESTAMP, assigned_at)),
+           recruiter_id = NULL
+       WHERE recruiter_id = ?`,
+      [parsedUserId],
+    )
+    await connection.execute('UPDATE candidates SET created_by = NULL, user_id = NULL WHERE created_by = ? OR user_id = ?', [parsedUserId, parsedUserId])
+    await connection.execute(
+      `UPDATE candidate_documents
+       SET verified_by = IF(verified_by = ?, NULL, verified_by),
+           uploaded_by = IF(uploaded_by = ?, NULL, uploaded_by)
+       WHERE verified_by = ? OR uploaded_by = ?`,
+      [parsedUserId, parsedUserId, parsedUserId, parsedUserId],
+    )
+    await connection.execute('UPDATE applications SET recruiter_id = NULL WHERE recruiter_id = ?', [parsedUserId])
+    await connection.execute('UPDATE screenings SET screened_by = NULL WHERE screened_by = ?', [parsedUserId])
+    await connection.execute('UPDATE shortlists SET shortlisted_by = NULL WHERE shortlisted_by = ?', [parsedUserId])
+    await connection.execute('UPDATE resume_shares SET shared_by = NULL WHERE shared_by = ?', [parsedUserId])
+    await connection.execute(
+      `UPDATE interviews
+       SET interviewer_user_id = IF(interviewer_user_id = ?, NULL, interviewer_user_id),
+           created_by = IF(created_by = ?, NULL, created_by)
+       WHERE interviewer_user_id = ? OR created_by = ?`,
+      [parsedUserId, parsedUserId, parsedUserId, parsedUserId],
+    )
+    await connection.execute('UPDATE interview_feedback SET entered_by = NULL WHERE entered_by = ?', [parsedUserId])
+    await connection.execute('UPDATE selections SET selected_by = NULL WHERE selected_by = ?', [parsedUserId])
+    await connection.execute('UPDATE attendance SET approved_by = NULL WHERE approved_by = ?', [parsedUserId])
+    await connection.execute('UPDATE invoices SET created_by = NULL WHERE created_by = ?', [parsedUserId])
+    await connection.execute('UPDATE user_invitations SET created_by = NULL WHERE created_by = ?', [parsedUserId])
+    await connection.execute('UPDATE application_status_history SET changed_by = NULL WHERE changed_by = ?', [parsedUserId])
+    await connection.execute('UPDATE audit_logs SET actor_user_id = NULL WHERE actor_user_id = ?', [parsedUserId])
+    await connection.execute(
+      `UPDATE customer_requirement_intakes
+       SET created_by = IF(created_by = ?, NULL, created_by),
+           reviewed_by = IF(reviewed_by = ?, NULL, reviewed_by)
+       WHERE created_by = ? OR reviewed_by = ?`,
+      [parsedUserId, parsedUserId, parsedUserId, parsedUserId],
+    )
+    await connection.execute(
+      `UPDATE agreement_versions
+       SET created_by = IF(created_by = ?, NULL, created_by),
+           reviewed_by = IF(reviewed_by = ?, NULL, reviewed_by),
+           customer_signed_by = IF(customer_signed_by = ?, NULL, customer_signed_by),
+           activated_by = IF(activated_by = ?, NULL, activated_by)
+       WHERE created_by = ? OR reviewed_by = ? OR customer_signed_by = ? OR activated_by = ?`,
+      [parsedUserId, parsedUserId, parsedUserId, parsedUserId, parsedUserId, parsedUserId, parsedUserId, parsedUserId],
+    )
+    await connection.execute('UPDATE agreement_events SET actor_user_id = NULL WHERE actor_user_id = ?', [parsedUserId])
+    await connection.execute('UPDATE candidate_consents SET recorded_by = NULL WHERE recorded_by = ?', [parsedUserId])
+    await connection.execute('UPDATE resume_share_events SET actor_user_id = NULL WHERE actor_user_id = ?', [parsedUserId])
+    await connection.execute('UPDATE customer_candidate_decisions SET decided_by = NULL WHERE decided_by = ?', [parsedUserId])
+    await connection.execute('DELETE FROM users WHERE user_id = ?', [parsedUserId])
+    await connection.commit()
+    return { message: 'User account deleted. Related business history was retained.' }
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
   }
 }
 

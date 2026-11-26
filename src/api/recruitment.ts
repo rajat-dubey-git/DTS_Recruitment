@@ -132,6 +132,19 @@ export async function scheduleRecruiterInterview(payload: {
   return handleResponse(res)
 }
 
+export async function updateRecruiterInterviewStatus(
+  interviewId: number,
+  status: 'COMPLETED' | 'CANCELLED' | 'NO_SHOW',
+): Promise<{ message: string; status: string }> {
+  const res = await fetch(`${API_BASE}/recruiter/interviews/${interviewId}/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ status }),
+  })
+  return handleResponse(res)
+}
+
 export async function createResumeShare(applicationId: number): Promise<{ shareId: number; message: string }> {
   const res = await fetch(`${API_BASE}/recruiter/resume-shares`, {
     method: 'POST',

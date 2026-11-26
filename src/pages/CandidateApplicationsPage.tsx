@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Activity, Clock, RotateCcw } from 'lucide-react'
 import { candidateApi } from '../api/candidate'
 import type { CandidateApplication, CandidateTimelineEvent } from '../api/candidate'
+import PaginationControls, { useListPagination } from '../components/PaginationControls'
 
 const withdrawableStatuses = new Set(['APPLIED', 'SCREENING', 'SHORTLISTED'])
 
@@ -14,6 +15,7 @@ export default function CandidateApplicationsPage() {
   const [busyApplication, setBusyApplication] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const applicationPage = useListPagination(applications)
 
   async function loadApplications() {
     const result = await candidateApi.applications()
@@ -95,7 +97,7 @@ export default function CandidateApplicationsPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            {applications.map((application) => (
+            {applicationPage.items.map((application) => (
               <article key={application.application_id} className="rounded-xl border border-slate-200 bg-white p-5">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
@@ -149,6 +151,12 @@ export default function CandidateApplicationsPage() {
                 )}
               </article>
             ))}
+            <PaginationControls
+              page={applicationPage.page}
+              pageCount={applicationPage.pageCount}
+              total={applicationPage.total}
+              onPageChange={applicationPage.setPage}
+            />
           </div>
         )}
     </div>

@@ -3,13 +3,11 @@ import { createReadStream } from 'node:fs'
 import { mkdir, stat, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { pool } from '../config/db.js'
+import { getCandidateProfileForUser } from './account-link.service.js'
+import { notifyAssignedRecruiters } from '../notifications/notification.service.js'
 
 async function getCandidateForUser(userId) {
-  const [rows] = await pool.execute(
-    'SELECT * FROM candidates WHERE user_id = ? LIMIT 1',
-    [userId],
-  )
-  return rows[0] || null
+  return getCandidateProfileForUser(userId)
 }
 
 function httpError(statusCode, message) {
@@ -382,7 +380,10 @@ export async function applyForRequirement(req, res, next) {
     const requirementId = Number(req.params.requirementId)
     if (!Number.isSafeInteger(requirementId) || requirementId < 1) throw httpError(400, 'Invalid requirement ID.')
     const [requirements] = await connection.execute(
-      "SELECT requirement_id FROM job_requirements WHERE requirement_id = ? AND status = 'OPEN' FOR UPDATE",
+      `SELECT requirement_id, requirement_number, job_title
+       FROM job_requirements
+       WHERE requirement_id = ? AND status = 'OPEN'
+       FOR UPDATE`,
       [requirementId],
     )
     if (!requirements[0]) throw httpError(404, 'Requirement is not open.')
@@ -404,6 +405,12 @@ export async function applyForRequirement(req, res, next) {
        VALUES (?, NULL, 'APPLIED', ?, 'Candidate applied through the portal.')`,
       [result.insertId, req.authUser.user_id],
     )
+    await notifyAssignedRecruiters(connection, requirementId, {
+      type: 'CANDIDATE_APPLIED',
+      title: `New application: ${requirements[0].requirement_number}`,
+      message: `A candidate applied for ${requirements[0].job_title}.`,
+      targetUrl: '/app/recruiter/applications',
+    })
     await connection.commit()
     return res.status(201).json({ applicationId: result.insertId, message: 'Application submitted.' })
   } catch (error) {
@@ -423,8 +430,10 @@ export async function withdrawApplication(req, res, next) {
     const applicationId = Number(req.params.applicationId)
     if (!Number.isSafeInteger(applicationId) || applicationId < 1) throw httpError(400, 'Invalid application ID.')
     const [rows] = await connection.execute(
-      `SELECT status FROM applications
-       WHERE application_id = ? AND candidate_id = ?
+      `SELECT a.status, r.requirement_id, r.requirement_number, r.job_title
+       FROM applications a
+       INNER JOIN job_requirements r ON r.requirement_id = a.requirement_id
+       WHERE a.application_id = ? AND a.candidate_id = ?
        FOR UPDATE`,
       [applicationId, candidate.candidate_id],
     )
@@ -441,6 +450,12 @@ export async function withdrawApplication(req, res, next) {
        VALUES (?, ?, 'WITHDRAWN', ?, 'Candidate withdrew through the portal.')`,
       [applicationId, rows[0].status, req.authUser.user_id],
     )
+    await notifyAssignedRecruiters(connection, rows[0].requirement_id, {
+      type: 'CANDIDATE_WITHDREW',
+      title: `Application withdrawn: ${rows[0].requirement_number}`,
+      message: `A candidate withdrew from ${rows[0].job_title}.`,
+      targetUrl: '/app/recruiter/applications',
+    })
     await connection.commit()
     return res.json({ message: 'Application withdrawn.' })
   } catch (error) {

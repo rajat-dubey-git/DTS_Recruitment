@@ -59,6 +59,7 @@ export type RequirementIntakeOptions = {
   request: {
     companyName: string
     jobTitle: string
+    skills: string[]
     jobDescription: string
     headcount: number
     workMode: string
@@ -102,6 +103,150 @@ export type RequirementIntakeResult = {
   recipientEmail: string
   expiresAt: string
   intakeUrl?: string
+}
+
+export type CustomerRequirementRequest = {
+  intake_id: number
+  job_title: string | null
+  skills_requested: string[]
+  headcount: number | null
+  work_mode: string | null
+  employment_schedule: string | null
+  status: string
+  submitted_at: string | null
+  created_at: string
+  requirement_id: number | null
+  requirement_number: string | null
+  requirement_status: string | null
+}
+
+export type CustomerRequirement = {
+  requirement_id: number
+  requirement_number: string
+  job_title: string
+  headcount: number
+  status: string
+  work_mode: string
+  work_location: string | null
+  employment_schedule: string
+  created_at: string
+  order_number: string
+}
+
+export type CustomerRequirementInput = {
+  jobTitle: string
+  skills: string[]
+  jobDescription: string
+  headcount: number
+  workMode: 'ONSITE' | 'REMOTE' | 'HYBRID'
+  workLocation: string
+  experienceMinYears: number | null
+  experienceMaxYears: number | null
+  salaryMin: number | null
+  salaryMax: number | null
+  employmentSchedule: 'FULL_TIME' | 'PART_TIME'
+  hoursPerWeek: number | null
+  targetJoinDate: string | null
+}
+
+export type CustomerJobProfile = {
+  job_profile_id: number
+  profile_code: string
+  profile_name: string
+  category: string | null
+  default_experience_min: number | string | null
+  default_experience_max: number | string | null
+  status: string
+}
+
+export type CustomerRecruiter = {
+  assignment_id: number
+  assignment_role: 'LEAD' | 'SUPPORT'
+  assigned_at: string
+  requirement_id: number
+  requirement_number: string
+  job_title: string
+  full_name: string
+  email: string
+}
+
+export type CustomerInterview = {
+  interview_id: number
+  round_number: number
+  interview_type: 'PHONE' | 'VIDEO' | 'IN_PERSON'
+  scheduled_start: string
+  scheduled_end: string
+  location_or_link: string | null
+  status: string
+  application_number: string
+  requirement_number: string
+  job_title: string
+  candidate_name: string
+  interviewer_name: string | null
+}
+
+export type AdminInvoice = {
+  invoice_id: number
+  invoice_number: string
+  invoice_type: string
+  invoice_date: string
+  due_date: string
+  subtotal: number | string
+  discount_amount: number | string
+  tax_total: number | string
+  total_amount: number | string
+  status: 'DRAFT' | 'ISSUED' | 'CANCELLED'
+  order_number: string
+  agreement_number: string
+  company_name: string
+  item_count: number
+}
+
+export type CustomerInvoice = {
+  invoice_id: number
+  invoice_number: string
+  invoice_type: string
+  invoice_date: string
+  due_date: string
+  service_period_start: string | null
+  service_period_end: string | null
+  subtotal: number | string
+  discount_amount: number | string
+  tax_total: number | string
+  total_amount: number | string
+  status: string
+  order_number: string
+  company_name: string
+}
+
+export type InvoiceableSelection = {
+  placement_id: number
+  selection_id: number
+  application_id: number
+  selected_at: string
+  application_number: string
+  requirement_number: string
+  job_title: string
+  service_order_id: number
+  order_number: string
+  service_order_title: string
+  agreement_number: string
+  service_name: string
+  employment_model: 'DTS_PAYROLL' | 'CUSTOMER_PAYROLL'
+  customer_id: number
+  company_name: string
+  payment_terms_days: number
+  candidate_name: string
+}
+
+export type AdminInvoiceDraftInput = {
+  invoiceNumber: string
+  placementId: number
+  invoiceDate: string
+  dueDate: string
+  description: string
+  unitPrice: number
+  taxRate: number
 }
 
 export type InvitationResult = {
@@ -251,10 +396,108 @@ export const workspaceApi = {
 
   async listCustomerInvoices() {
     try {
-      const response = await http.get<{ invoices: WorkspaceRecord[] }>('/customer/invoices')
+      const response = await http.get<{ invoices: CustomerInvoice[] }>('/customer/invoices')
       return response.data.invoices
     } catch (error) {
       throw new Error(messageFrom(error, 'Unable to load customer invoices.'))
+    }
+  },
+
+  async listAdminInvoices() {
+    try {
+      const response = await http.get<{ invoices: AdminInvoice[] }>('/admin/invoices')
+      return response.data.invoices
+    } catch (error) {
+      throw new Error(messageFrom(error, 'Unable to load invoices.'))
+    }
+  },
+
+  async listInvoiceableSelections() {
+    try {
+      const response = await http.get<{ selections: InvoiceableSelection[] }>(
+        '/admin/invoices/eligible-selections',
+      )
+      return response.data.selections
+    } catch (error) {
+      throw new Error(messageFrom(error, 'Unable to load selected candidates for invoicing.'))
+    }
+  },
+
+  async createAdminInvoice(values: AdminInvoiceDraftInput) {
+    try {
+      const response = await http.post<{ invoiceId: number; message: string }>('/admin/invoices', values)
+      return response.data
+    } catch (error) {
+      throw new Error(messageFrom(error, 'Unable to create the invoice draft.'))
+    }
+  },
+
+  async issueAdminInvoice(invoiceId: number) {
+    try {
+      const response = await http.post<{ message: string }>(`/admin/invoices/${invoiceId}/issue`)
+      return response.data
+    } catch (error) {
+      throw new Error(messageFrom(error, 'Unable to issue this invoice.'))
+    }
+  },
+
+  async deleteUserAccount(userId: number) {
+    try {
+      const response = await http.delete<{ message: string }>(`/admin/users/${userId}`)
+      return response.data
+    } catch (error) {
+      throw new Error(messageFrom(error, 'Unable to delete this user account.'))
+    }
+  },
+
+  async listCustomerRequirements() {
+    try {
+      const response = await http.get<{
+        requests: CustomerRequirementRequest[]
+        requirements: CustomerRequirement[]
+      }>('/customer/requirements')
+      return response.data
+    } catch (error) {
+      throw new Error(messageFrom(error, 'Unable to load customer requirements.'))
+    }
+  },
+
+  async createCustomerRequirement(values: CustomerRequirementInput) {
+    try {
+      const response = await http.post<{ intakeId: number; message: string }>(
+        '/customer/requirements',
+        values,
+      )
+      return response.data
+    } catch (error) {
+      throw new Error(messageFrom(error, 'Unable to submit this requirement.'))
+    }
+  },
+
+  async listCustomerJobProfiles() {
+    try {
+      const response = await http.get<{ jobProfiles: CustomerJobProfile[] }>('/customer/job-profiles')
+      return response.data.jobProfiles
+    } catch (error) {
+      throw new Error(messageFrom(error, 'Unable to load available job profiles.'))
+    }
+  },
+
+  async listCustomerRecruiters() {
+    try {
+      const response = await http.get<{ recruiters: CustomerRecruiter[] }>('/customer/recruiters')
+      return response.data.recruiters
+    } catch (error) {
+      throw new Error(messageFrom(error, 'Unable to load assigned recruiters.'))
+    }
+  },
+
+  async listCustomerInterviews() {
+    try {
+      const response = await http.get<{ interviews: CustomerInterview[] }>('/customer/interviews')
+      return response.data.interviews
+    } catch (error) {
+      throw new Error(messageFrom(error, 'Unable to load customer interviews.'))
     }
   },
 
@@ -330,6 +573,15 @@ export const workspaceApi = {
     }
   },
 
+  async downloadAdminAgreementSample() {
+    try {
+      const response = await http.get('/agreements/admin/sample.pdf', { responseType: 'blob' })
+      return response.data as Blob
+    } catch (error) {
+      throw new Error(messageFrom(error, 'Unable to load the sample agreement.'))
+    }
+  },
+
   async activateAdminAgreement(
     agreementId: number,
     versionId: number,
@@ -343,6 +595,19 @@ export const workspaceApi = {
       return response.data
     } catch (error) {
       throw new Error(messageFrom(error, 'Unable to activate the signed agreement.'))
+    }
+  },
+
+  async provisionAgreementOrders(agreementId: number) {
+    try {
+      const response = await http.post<{
+        serviceTypeCount: number
+        changedCount: number
+        message: string
+      }>(`/agreements/admin/${agreementId}/provision-orders`)
+      return response.data
+    } catch (error) {
+      throw new Error(messageFrom(error, 'Unable to provision service orders for this agreement.'))
     }
   },
 
@@ -472,7 +737,12 @@ export const workspaceApi = {
     }
   },
 
-  async convertRequirementIntake(intakeId: number, values: { jobProfileId: number; serviceOrderId: number }) {
+  async convertRequirementIntake(intakeId: number, values: {
+    jobProfileId: number
+    serviceOrderId: number
+    jobTitle: string
+    skills: string[]
+  }) {
     try {
       const response = await http.post<{ requirementId: number; requirementNumber: string; message: string }>(
         `/admin/requirement-intakes/${intakeId}/convert`,

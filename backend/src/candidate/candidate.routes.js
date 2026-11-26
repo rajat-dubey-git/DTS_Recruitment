@@ -20,6 +20,11 @@ import {
 } from './candidate.controller.js'
 
 import { uploadCandidateResume } from './candidate.upload.js'
+import {
+  downloadMyOffer,
+  listMyOffers,
+  respondToMyOffer,
+} from '../offers/offer.controller.js'
 
 const router = Router()
 
@@ -43,6 +48,9 @@ router.post('/requirements/:requirementId/apply', applyForRequirement)
 router.get('/applications', getMyApplications)
 router.get('/applications/:applicationId/timeline', getMyApplicationTimeline)
 router.post('/applications/:applicationId/withdraw', withdrawApplication)
+router.get('/offers', listMyOffers)
+router.get('/offers/:offerId/download', downloadMyOffer)
+router.post('/offers/:offerId/respond', respondToMyOffer)
 
 // Private resume document
 router.post('/resume', uploadCandidateResume, uploadMyResume)

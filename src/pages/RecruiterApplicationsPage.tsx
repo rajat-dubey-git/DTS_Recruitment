@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Search } from 'lucide-react'
 import { fetchRecruiterApplications, updateRecruiterApplicationStatus } from '../api/recruitment'
+import { offerApi } from '../api/offers'
+import OfferUploadForm from '../components/OfferUploadForm'
+import PaginationControls, { useListPagination } from '../components/PaginationControls'
 import type { RecruiterApplication } from '../types/recruitment'
 
 const statuses = ['APPLIED', 'SCREENING', 'SHORTLISTED', 'INTERVIEW', 'SELECTED', 'REJECTED', 'WITHDRAWN']
@@ -28,6 +31,7 @@ export default function RecruiterApplicationsPage() {
   const [loading, setLoading] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
   const [nextStatus, setNextStatus] = useState<Record<number, string>>({})
   const [savingApplicationId, setSavingApplicationId] = useState<number | null>(null)
 
@@ -51,6 +55,7 @@ export default function RecruiterApplicationsPage() {
   }, [])
 
   const visibleApplications = applications.filter((application) => !statusFilter || application.status === statusFilter)
+  const applicationPage = useListPagination(visibleApplications, `${query}:${statusFilter}`)
 
   const updateStatus = async (applicationId: number) => {
     const status = nextStatus[applicationId]
@@ -84,6 +89,7 @@ export default function RecruiterApplicationsPage() {
       </div>
 
       {error && <div className="form-error" role="alert">{error}</div>}
+      {message && <div className="database-read-only" role="status">{message}</div>}
 
       <section className="panel">
         <form className="customer-toolbar" onSubmit={(event) => void loadApplications(event)}>
@@ -117,7 +123,7 @@ export default function RecruiterApplicationsPage() {
           <div className="customer-empty">No applications match these filters.</div>
         ) : (
           <div className="agreement-line-list">
-            {visibleApplications.map((application) => (
+            {applicationPage.items.map((application) => (
               <article className="agreement-line-card" key={application.application_id}>
                 <div style={{ flex: 1 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
@@ -128,6 +134,18 @@ export default function RecruiterApplicationsPage() {
                   <p><strong>{application.job_title}</strong> · {application.company_name}</p>
                   <small>{application.application_number} · {application.requirement_number} · Submitted {dateLabel(application.applied_at)}</small>
                   {application.recruiter_name && <small> · Recruiter: {application.recruiter_name}</small>}
+                  {application.status === 'SELECTED' && application.selection_id !== null && (
+                    <details className="recruiter-offer-details">
+                      <summary>Upload offer letter</summary>
+                      <OfferUploadForm
+                        onSubmit={(form) => offerApi.sendRecruiter(application.selection_id!, form)}
+                        onSuccess={(successMessage) => {
+                          setMessage(successMessage)
+                          void loadApplications()
+                        }}
+                      />
+                    </details>
+                  )}
                   {(nextStatuses[application.status] ?? []).length > 0 && (
                     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.75rem', flexWrap: 'wrap' }}>
                       <select
@@ -156,6 +174,12 @@ export default function RecruiterApplicationsPage() {
                 </div>
               </article>
             ))}
+            <PaginationControls
+              page={applicationPage.page}
+              pageCount={applicationPage.pageCount}
+              total={applicationPage.total}
+              onPageChange={applicationPage.setPage}
+            />
           </div>
         )}
       </section>

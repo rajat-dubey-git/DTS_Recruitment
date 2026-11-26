@@ -11,6 +11,7 @@ import type {
   AgreementServiceLineInput,
 } from '../api/workspace'
 import AgreementSampleTemplateModal from '../components/AgreementSampleTemplateModal'
+import PaginationControls, { useListPagination } from '../components/PaginationControls'
 import { v4 as uuidv4 } from 'uuid'
 
 type DraftLine = {
@@ -445,6 +446,7 @@ export default function CustomerAgreementsPage() {
     ].some((value) => value.toLowerCase().includes(query))
     return matchesStatus && matchesSearch
   })
+  const agreementPage = useListPagination(visibleAgreements, `${filter}:${searchTerm}`)
 
   const addLine = () => setLines((current) => [...current, blankLine(catalog)])
   const removeLine = (index: number) => setLines((current) => current.filter((_, lineIndex) => lineIndex !== index))
@@ -631,7 +633,7 @@ export default function CustomerAgreementsPage() {
             {agreements.length === 0 ? 'No agreements yet.' : 'No agreements match these filters.'}
           </div>
         )}
-        {visibleAgreements.map((agreement) => (
+        {agreementPage.items.map((agreement) => (
           <article className={`agreement-list-row ${selectedAgreementId === agreement.agreement_id ? 'selected' : ''}`} key={agreement.agreement_id}>
             <button type="button" className="agreement-row-main" onClick={() => setSelectedAgreementId(
               selectedAgreementId === agreement.agreement_id ? null : agreement.agreement_id,
@@ -663,6 +665,12 @@ export default function CustomerAgreementsPage() {
             </div>
           </article>
         ))}
+        <PaginationControls
+          page={agreementPage.page}
+          pageCount={agreementPage.pageCount}
+          total={agreementPage.total}
+          onPageChange={agreementPage.setPage}
+        />
       </section>
 
       {selectedAgreementId !== null && (

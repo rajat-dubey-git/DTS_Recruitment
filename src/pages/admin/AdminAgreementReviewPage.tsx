@@ -7,6 +7,7 @@ import {
   Download,
   FileCheck2,
   FileText,
+  RefreshCw,
   Save,
   XCircle,
 } from 'lucide-react'
@@ -195,6 +196,22 @@ export default function AdminAgreementReviewPage() {
     }
   }
 
+  const provisionOrders = async () => {
+    if (!detail) return
+    setBusy(true)
+    setError('')
+    setMessage('')
+    try {
+      const result = await workspaceApi.provisionAgreementOrders(detail.agreement.agreementId)
+      setMessage(result.message)
+      await load()
+    } catch (provisionError) {
+      setError(provisionError instanceof Error ? provisionError.message : 'Unable to provision service orders.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const downloadDoc = async (kind: 'draft' | 'signed') => {
     if (!detail?.version) return
     setBusy(true)
@@ -223,6 +240,7 @@ export default function AdminAgreementReviewPage() {
   const canReview = canEditTerms
   const canActivate = versionStatus === 'SIGNED_PENDING_ADMIN_ACTIVATION'
   const canDownloadSigned = detail?.version?.canDownloadSignedCopy
+  const canProvisionOrders = detail?.agreement.status === 'ACTIVE' && versionStatus === 'ACTIVE'
 
   if (loading) {
     return (
@@ -236,6 +254,16 @@ export default function AdminAgreementReviewPage() {
     return (
       <div className="dashboard">
         <div className="panel database-message">Agreement not found.</div>
+        {canProvisionOrders && (
+          <button
+            type="button"
+            className="btn btn-outline"
+            disabled={busy}
+            onClick={() => void provisionOrders()}
+          >
+            <RefreshCw size={15} /> {busy ? 'Checking…' : 'Ensure service orders'}
+          </button>
+        )}
         <Link className="btn btn-outline" to="/app/admin/agreements"><ArrowLeft size={15} /> Back to agreements</Link>
       </div>
     )
@@ -275,8 +303,8 @@ export default function AdminAgreementReviewPage() {
               <div>
                 <h3>Agreement details</h3>
                 <p>
-                  Status: <strong>{statusLabel(detail.agreement.status)}</strong>
-                  {detail.version && <> · Version: <strong>v{detail.version.versionNumber}</strong> ({statusLabel(detail.version.status)})</>}
+                  Workflow status: <strong>{statusLabel(detail.version?.status ?? detail.agreement.status)}</strong>
+                  {detail.version && <> · Version <strong>v{detail.version.versionNumber}</strong></>}
                 </p>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem' }}>

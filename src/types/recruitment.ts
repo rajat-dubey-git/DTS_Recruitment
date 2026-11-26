@@ -7,10 +7,10 @@ export interface RecruiterRequirement {
   status: string
   work_mode: 'ONSITE' | 'REMOTE' | 'HYBRID'
   work_location: string | null
-  experience_min_years: number | null
-  experience_max_years: number | null
+  experience_min_years: number | string | null
+  experience_max_years: number | string | null
   employment_schedule: 'FULL_TIME' | 'PART_TIME'
-  hours_per_week: number | null
+  hours_per_week: number | string | null
   salary_min: number | string | null
   salary_max: number | string | null
   target_join_date: string | null
@@ -82,7 +82,7 @@ export interface RecruiterCandidateDetails {
     skill_id: number
     skill_name: string
     skill_category: string | null
-    experience_years: number | null
+    experience_years: number | string | null
     proficiency: string | null
   }>
   match: {
@@ -132,6 +132,7 @@ export interface RecruiterApplication {
   applied_at: string
   requirement_id: number
   candidate_id: number
+  selection_id: number | null
   candidate_name: string
   candidate_email: string
   candidate_mobile: string | null
@@ -173,7 +174,7 @@ export interface CustomerSharedCandidate {
   requirement_code: string
   job_title: string
   candidate_name: string
-  total_experience_years: number | null
+  total_experience_years: number | string | null
   current_location: string | null
   primary_skills: string | null
   expected_ctc: number | string | null

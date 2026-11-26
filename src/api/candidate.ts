@@ -7,9 +7,9 @@ export type CandidateProfile = {
   mobile: string
   current_city: string | null
   current_state: string | null
-  total_experience_years: number | null
-  current_ctc: number | null
-  expected_ctc: number | null
+  total_experience_years: number | string | null
+  current_ctc: number | string | null
+  expected_ctc: number | string | null
   notice_period_days: number | null
   profile_summary: string | null
   status: string
@@ -37,7 +37,7 @@ export type CandidateSkill = {
   skill_id: number
   skill_name: string
   skill_category: string | null
-  experience_years?: number | null
+  experience_years?: number | string | null
   proficiency?: string | null
 }
 
@@ -49,13 +49,13 @@ export type CandidateRequirement = {
   headcount: number
   work_mode: string
   work_location: string | null
-  experience_min_years: number | null
-  experience_max_years: number | null
+  experience_min_years: number | string | null
+  experience_max_years: number | string | null
   employment_schedule: string
   target_join_date: string | null
-  salary_min: number | null
-  salary_max: number | null
-  hours_per_week: number | null
+  salary_min: number | string | null
+  salary_max: number | string | null
+  hours_per_week: number | string | null
   company_name: string
   job_profile_title: string
   has_applied: number

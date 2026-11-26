@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { createInvitation } from './user.controller.js'
+import { createInvitation, removeUser } from './user.controller.js'
 import {
   downloadAdminCandidateDocument,
   getAdminCandidateDetails,
@@ -32,12 +32,29 @@ import {
   updateWorkspaceRecord,
 } from './workspace.controller.js'
 import { requireAdmin, requireAuth } from '../auth/auth.middleware.js'
+import {
+  createAdminInvoice,
+  issueAdminInvoice,
+  listAdminInvoices,
+  listInvoiceableSelections,
+} from './invoice.controller.js'
+import {
+  createAdminOffer,
+  listEligibleOfferSelections,
+} from '../offers/offer.controller.js'
+import { offerPdfUpload } from '../offers/offer.upload.js'
 
 const router = Router()
 
 router.use(requireAuth, requireAdmin)
 
 router.get('/dashboard', getDashboardSummary)
+router.get('/invoices', listAdminInvoices)
+router.get('/invoices/eligible-selections', listInvoiceableSelections)
+router.post('/invoices', createAdminInvoice)
+router.post('/invoices/:invoiceId/issue', issueAdminInvoice)
+router.get('/offers/eligible-selections', listEligibleOfferSelections)
+router.post('/selections/:selectionId/offers', offerPdfUpload, createAdminOffer)
 router.get('/candidates', listAdminCandidates)
 router.get('/candidates/:candidateId', getAdminCandidateDetails)
 router.get('/candidates/:candidateId/documents/:documentId/download', downloadAdminCandidateDocument)
@@ -47,6 +64,7 @@ router.get('/customer-addresses', listCustomerAddresses)
 router.get('/customer-contacts', listCustomerContacts)
 router.get('/recruiters', listRecruiters)
 router.get('/users', listUsers)
+router.delete('/users/:userId', removeUser)
 router.get('/skills', listSkills)
 router.get('/service-types', listServiceTypes)
 router.get('/job-profiles', listJobProfiles)

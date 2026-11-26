@@ -131,6 +131,11 @@ Admin endpoints (all require an active ADMIN session):
 - `GET /api/admin/customer-contacts`
 - `GET /api/admin/recruiters`
 - `GET /api/admin/users`
+- `DELETE /api/admin/users/:userId`
+- `GET /api/admin/invoices`
+- `GET /api/admin/invoices/eligible-selections`
+- `POST /api/admin/invoices`
+- `POST /api/admin/invoices/:invoiceId/issue`
 - `GET /api/admin/skills`
 - `GET /api/admin/service-types`
 - `GET /api/admin/job-profiles`
@@ -150,7 +155,7 @@ Admin endpoints (all require an active ADMIN session):
 - `POST /api/auth/invitations/accept` (public, rate-limited, one-time token)
 - `GET /api/public/requirement-intakes/:token` and `POST` (public, rate-limited, expiring one-time form)
 
-Allowlisted create endpoints are available for customers, skills, service types, job profiles, agreements, rate cards and service orders. Admins can create requirements only against an approved/in-progress service order and active job profile; they start at `PENDING_APPROVAL`. List endpoints accept `limit`, `offset` and `search`. Responses contain only fields needed by these modules. Arbitrary database-table read/write endpoints were removed.
+Allowlisted create endpoints are available for customers, skills, service types, job profiles, agreements, rate cards and service orders. Admins can create requirements only against an approved/in-progress service order and active job profile; they start at `PENDING_APPROVAL`. Primary record lists across the admin, customer, recruiter and candidate workspaces show at most 10 records per page. List endpoints accept `limit`, `offset` and `search`. Responses contain only fields needed by these modules. Arbitrary database-table read/write endpoints were removed.
 
 Recruiter endpoints (require an active RECRUITER or ADMIN session):
 
@@ -163,7 +168,21 @@ Recruiter endpoints (require an active RECRUITER or ADMIN session):
 - `PATCH /api/recruiter/applications/:applicationId/status`
 - `GET /api/recruiter/interviews`
 - `POST /api/recruiter/interviews`
+- `PATCH /api/recruiter/interviews/:interviewId/status`
 - `POST /api/recruiter/resume-shares`
+
+Customer endpoints (require an active CUSTOMER session and are scoped to that account):
+
+- `GET` and `POST /api/customer/requirements`
+- `GET /api/customer/job-profiles`
+- `GET /api/customer/recruiters`
+- `GET /api/customer/interviews`
+- `GET /api/customer/invoices` (issued invoices only)
+- `GET /api/customer/invoices/:invoiceId/download`
+- `GET /api/customer/candidates`
+- `POST /api/customer/candidates/:shareId/decision`
+
+An application moved to `SELECTED` creates a selection and pending placement. Admins manually enter invoice number, amount, tax and dates from approved terms; invoices stay in draft until explicitly issued. Automatic fee calculation and automatic number generation are not implemented.
 
 Candidate endpoints (require an active CANDIDATE session):
 
@@ -181,7 +200,11 @@ Admin candidate review endpoints (require an active ADMIN session):
 - `GET /api/admin/candidates/:candidateId/documents/:documentId/download`
 - `PATCH /api/admin/candidates/:candidateId/documents/:documentId/review`
 
-Candidate resume files are stored under the configured private storage root. Uploads remain pending until an administrator attests to external verification and malware scanning; the application does not scan uploaded files. Recruiters and customers can only access documents after verification/clean status and the required candidate consent/share checks.
+Creating a CANDIDATE invitation through `POST /api/admin/users/invitations` also creates or links the corresponding `candidates` record inside the same database transaction. Candidate invitations require a valid mobile number. Existing candidate accounts and legacy profiles are reconciled by the backend using the existing unique email and `user_id` relationships; no schema change is required. If a legacy candidate account has no profile and no valid mobile number, update the account's mobile number from **Admin → Users** before the candidate retries dashboard access.
+
+Candidate resume files are stored under the configured private storage root. Generated invoice PDFs are saved under its `invoice` directory before they are downloaded. Uploads remain pending until an administrator attests to external verification and malware scanning; the application does not scan uploaded files. Recruiters and customers can only access documents after verification/clean status and the required candidate consent/share checks.
+
+Run `npm test` for the focused candidate-account-linking tests, `npm run check` for backend syntax validation, and `npm run build` at the repository root for the frontend type-check/build.
 
 ## Development Rules
 

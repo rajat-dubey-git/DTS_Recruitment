@@ -35,6 +35,7 @@ export default function RequirementIntakePage() {
     try {
       await workspaceApi.submitPublicRequirementIntake(token, {
         jobTitle: form.get('jobTitle'),
+        skills: String(form.get('skills') ?? '').split(/[,\n]/).map((skill) => skill.trim()).filter(Boolean),
         jobDescription: form.get('jobDescription'),
         headcount: form.get('headcount'),
         workMode: form.get('workMode'),
@@ -73,6 +74,7 @@ export default function RequirementIntakePage() {
             <p className="public-intake-intro">Submit your hiring needs for <strong>{intake.companyName}</strong>. Our team will review the details before creating a requirement.</p>
             <form onSubmit={(event) => void submit(event)}>
               <label>Job title *<input name="jobTitle" maxLength={150} required /></label>
+              <label>Required skills (separate with commas or new lines)<textarea name="skills" rows={2} /></label>
               <label>Job description and responsibilities *<textarea name="jobDescription" maxLength={60000} rows={6} required /></label>
               <div className="public-intake-grid">
                 <label>Headcount *<input name="headcount" type="number" min={1} max={65535} step={1} required /></label>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Edit2, FileText, Filter, Mail, Plus, Search, UserRoundPlus, X } from 'lucide-react'
+import { Edit2, FileText, Filter, Mail, Plus, Search, Trash2, UserRoundPlus, X } from 'lucide-react'
 import { workspaceApi } from '../../api/workspace'
 import type {
   AdminModule,
@@ -16,8 +16,15 @@ import AdminRequirementCreateDialog from './AdminRequirementCreateDialog'
 import WorkspaceCreateDialog from './WorkspaceCreateDialog'
 import WorkspaceEditDialog from './WorkspaceEditDialog'
 import AgreementSampleTemplateModal from '../../components/AgreementSampleTemplateModal'
+import PaginationControls from '../../components/PaginationControls'
 
-const PAGE_SIZE = 50
+const PAGE_SIZE = 10
+const CUSTOMER_OPTION_PAGE_SIZE = 100
+
+type CustomerOption = {
+  id: number
+  name: string
+}
 
 const moduleConfig: Record<AdminModule, {
   title: string
@@ -85,6 +92,7 @@ const moduleConfig: Record<AdminModule, {
       { key: 'email', label: 'Email' },
       { key: 'mobile', label: 'Mobile' },
       { key: 'role', label: 'Role', enumFilterKey: 'u.role' },
+      { key: 'candidate_profile_status', label: 'Candidate profile' },
       { key: 'customer_company', label: 'Customer' },
       { key: 'status', label: 'Status', enumFilterKey: 'u.status' },
       { key: 'last_login_at', label: 'Last sign in' },
@@ -246,8 +254,12 @@ export default function AdminWorkspacePage() {
   const [loading, setLoading] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [deletingUserId, setDeletingUserId] = useState<number | null>(null)
   const [inviteRole, setInviteRole] = useState<InvitationRole | null>(null)
   const [inviteCustomer, setInviteCustomer] = useState<{ id: number; name: string } | null>(null)
+  const [customerOptions, setCustomerOptions] = useState<CustomerOption[]>([])
+  const [loadingCustomerOptions, setLoadingCustomerOptions] = useState(false)
   const [inviteBusy, setInviteBusy] = useState(false)
   const [inviteError, setInviteError] = useState('')
   const [invitation, setInvitation] = useState<InvitationResult | null>(null)
@@ -266,12 +278,43 @@ export default function AdminWorkspacePage() {
   const [assignmentRecruiterId, setAssignmentRecruiterId] = useState('')
   const [assignmentBusy, setAssignmentBusy] = useState(false)
   const [assignmentError, setAssignmentError] = useState('')
+  const [customerRequests, setCustomerRequests] = useState<WorkspaceRecord[]>([])
+  const [customerRequestsTotal, setCustomerRequestsTotal] = useState(0)
+  const [customerRequestsOffset, setCustomerRequestsOffset] = useState(0)
+  const [customerRequestsLoading, setCustomerRequestsLoading] = useState(false)
+  const [customerRequestsError, setCustomerRequestsError] = useState('')
+
+  const deleteUser = async (row: WorkspaceRecord) => {
+    const userId = Number(row.user_id)
+    if (!Number.isSafeInteger(userId) || userId < 1) {
+      setError('This user record has an invalid ID.')
+      return
+    }
+    const name = String(row.full_name ?? row.email ?? 'this user')
+    if (!window.confirm(
+      `Permanently delete the account for ${name}? Related business history will be retained, but login access and account-only records will be removed.`,
+    )) return
+
+    setDeletingUserId(userId)
+    setError('')
+    setNotice('')
+    try {
+      const result = await workspaceApi.deleteUserAccount(userId)
+      setNotice(result.message)
+      setReloadKey((value) => value + 1)
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Unable to delete this user account.')
+    } finally {
+      setDeletingUserId(null)
+    }
+  }
 
   useEffect(() => {
     setColumnFilters({})
     setFilterOptions({})
     setOpenFilter(null)
     setOffset(0)
+    setCustomerRequestsOffset(0)
     setSearchText('')
     setSearch('')
   }, [selectedModule])
@@ -316,8 +359,99 @@ export default function AdminWorkspacePage() {
     }
   }, [selectedModule, offset, search, columnFilters, reloadKey])
 
+  useEffect(() => {
+    if (inviteRole !== 'CUSTOMER') {
+      setLoadingCustomerOptions(false)
+      return
+    }
+
+    let active = true
+    setLoadingCustomerOptions(true)
+    setInviteError('')
+
+    const loadCustomers = async () => {
+      const options: CustomerOption[] = []
+      const firstPage = await workspaceApi.list('customers', {
+        limit: CUSTOMER_OPTION_PAGE_SIZE,
+        offset: 0,
+        search: '',
+      })
+      const mapRows = (rows: WorkspaceRecord[]) => rows.map((row) => ({
+        id: Number(row.customer_id),
+        name: `${String(row.customer_code ?? '')} — ${String(row.company_name ?? '')}`.trim(),
+      }))
+      options.push(...mapRows(firstPage.rows))
+
+      for (let offset = firstPage.limit; offset < firstPage.total; offset += firstPage.limit) {
+        const page = await workspaceApi.list('customers', {
+          limit: CUSTOMER_OPTION_PAGE_SIZE,
+          offset,
+          search: '',
+        })
+        options.push(...mapRows(page.rows))
+      }
+
+      return options
+    }
+
+    void loadCustomers()
+      .then((options) => {
+        if (active) setCustomerOptions(options)
+      })
+      .catch((loadError: unknown) => {
+        if (active) {
+          setInviteError(loadError instanceof Error ? loadError.message : 'Unable to load customers.')
+        }
+      })
+      .finally(() => {
+        if (active) setLoadingCustomerOptions(false)
+      })
+
+    return () => { active = false }
+  }, [inviteRole])
+
+  useEffect(() => {
+    if (selectedModule !== 'requirements') {
+      setCustomerRequests([])
+      setCustomerRequestsTotal(0)
+      setCustomerRequestsOffset(0)
+      setCustomerRequestsError('')
+      setCustomerRequestsLoading(false)
+      return
+    }
+
+    let active = true
+    setCustomerRequestsLoading(true)
+    setCustomerRequestsError('')
+    workspaceApi.list('requirement-intakes', {
+      limit: PAGE_SIZE,
+      offset: customerRequestsOffset,
+      search: '',
+      filterColumns: { 'i.status': 'SUBMITTED' },
+    })
+      .then((page) => {
+        if (!active) return
+        setCustomerRequests(page.rows)
+        setCustomerRequestsTotal(page.total)
+      })
+      .catch((loadError: unknown) => {
+        if (active) {
+          setCustomerRequestsError(loadError instanceof Error ? loadError.message : 'Unable to load customer requests.')
+        }
+      })
+      .finally(() => {
+        if (active) setCustomerRequestsLoading(false)
+      })
+
+    return () => { active = false }
+  }, [selectedModule, reloadKey, customerRequestsOffset])
+
   const sendInvitation = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (inviteRole === 'CUSTOMER' && !inviteCustomer) {
+      setInviteError('Select the customer organisation for this contact.')
+      return
+    }
     const formElement = event.currentTarget
     const form = new FormData(formElement)
     setInviteBusy(true)
@@ -460,6 +594,72 @@ export default function AdminWorkspacePage() {
         </div>
 
         {error && <div className="form-error" role="alert">{error}</div>}
+        {notice && <div className="database-read-only" role="status">{notice}</div>}
+
+        {selectedModule === 'requirements' && (
+          <section className="panel customer-table-panel">
+            <div className="customer-toolbar">
+              <div>
+                <h2>Customer requests awaiting review</h2>
+                <p>Review submitted customer requests and map them to an approved service order to create a requirement.</p>
+              </div>
+              <span className="agreement-status">{customerRequestsTotal} submitted</span>
+            </div>
+            {customerRequestsError && <div className="form-error" role="alert">{customerRequestsError}</div>}
+            {customerRequestsLoading ? (
+              <div className="customer-empty">Loading customer requests…</div>
+            ) : customerRequests.length === 0 ? (
+              <div className="customer-empty">No submitted customer requests are awaiting review.</div>
+            ) : (
+              <div className="customer-table-wrapper">
+                <table className="customer-table">
+                  <thead>
+                    <tr>
+                      <th>Customer</th>
+                      <th>Contact</th>
+                      <th>Email</th>
+                      <th>Requested job</th>
+                      <th>Headcount</th>
+                      <th>Submitted</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {customerRequests.map((request) => (
+                      <tr key={String(request.intake_id)}>
+                        <td>{display(request.company_name)}</td>
+                        <td>{display(request.contact_name)}</td>
+                        <td>{display(request.email)}</td>
+                        <td>{display(request.job_title)}</td>
+                        <td>{display(request.headcount)}</td>
+                        <td>{display(request.submitted_at)}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="btn btn-outline"
+                            style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                            onClick={() => setConversionIntakeId(Number(request.intake_id))}
+                          >
+                            Review &amp; convert
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {!customerRequestsLoading && (
+              <PaginationControls
+                page={Math.floor(customerRequestsOffset / PAGE_SIZE) + 1}
+                pageCount={Math.max(1, Math.ceil(customerRequestsTotal / PAGE_SIZE))}
+                total={customerRequestsTotal}
+                onPageChange={(page) => setCustomerRequestsOffset((page - 1) * PAGE_SIZE)}
+              />
+            )}
+          </section>
+        )}
+
         <div className="customer-table-wrapper">
           <table className="customer-table">
             <thead>
@@ -662,6 +862,18 @@ export default function AdminWorkspacePage() {
                           Review workflow
                         </Link>
                       )}
+
+                      {selectedModule === 'users' && (
+                        <button
+                          type="button"
+                          className="btn btn-outline"
+                          style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                          disabled={deletingUserId === Number(row.user_id)}
+                          onClick={() => void deleteUser(row)}
+                        >
+                          <Trash2 size={13} /> {deletingUserId === Number(row.user_id) ? 'Deleting…' : 'Delete user'}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -705,36 +917,79 @@ export default function AdminWorkspacePage() {
             <form onSubmit={(event) => void sendInvitation(event)}>
               <label>Full name *<input name="fullName" autoComplete="name" maxLength={100} required /></label>
               <label>Email address *<input name="email" type="email" autoComplete="email" maxLength={150} required /></label>
-              <label>Mobile (optional)<input name="mobile" type="tel" autoComplete="tel" maxLength={16} /></label>
-              {!inviteCustomer && (
-                <label>
-                  Role *
-                  <select
-                    value={inviteRole}
-                    onChange={(event) => setInviteRole(event.target.value as InvitationRole)}
-                    required
-                  >
-                    <option value="RECRUITER">Recruiter</option>
-                    <option value="CUSTOMER">Customer contact</option>
-                    <option value="CANDIDATE">Candidate</option>
-                  </select>
-                </label>
+              <label>
+                Mobile{inviteRole === 'CANDIDATE' ? ' *' : ' (optional)'}
+                <input name="mobile" type="tel" autoComplete="tel" maxLength={15}
+                  required={inviteRole === 'CANDIDATE'} pattern="[+]?[0-9]{7,15}"
+                  title="Enter 7 to 15 digits, optionally starting with +." />
+              </label>
+              <label>
+                Role *
+                <select
+                  value={inviteRole}
+                  onChange={(event) => {
+                    const role = event.target.value as InvitationRole
+                    setInviteRole(role)
+                    if (role !== 'CUSTOMER') setInviteCustomer(null)
+                  }}
+                  required
+                >
+                  <option value="RECRUITER">Recruiter</option>
+                  <option value="CUSTOMER">Customer contact</option>
+                  <option value="CANDIDATE">Candidate</option>
+                </select>
+              </label>
+              {inviteRole === 'CUSTOMER' && (
+                <>
+                  <label>
+                    Customer organisation *
+                    <select
+                      value={inviteCustomer ? String(inviteCustomer.id) : ''}
+                      onChange={(event) => {
+                        const customer = customerOptions.find((option) => String(option.id) === event.target.value)
+                        setInviteCustomer(customer ?? null)
+                      }}
+                      required
+                      disabled={loadingCustomerOptions}
+                    >
+                      <option value="">
+                        {loadingCustomerOptions ? 'Loading customers…' : 'Select a customer'}
+                      </option>
+                      {customerOptions.map((customer) => (
+                        <option key={customer.id} value={customer.id}>{customer.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <p className="customer-contact-access-note">
+                    Each contact has a separate login. Contacts linked to this organisation share its customer portal data.
+                  </p>
+                </>
               )}
               {inviteError && <div className="customer-form-error" role="alert">{inviteError}</div>}
               {invitation?.invitationUrl && (
                 <div className="database-read-only" role="status">
-                  Invitation created. Share this one-time link with the user. They must set a password before signing in:
+                  {inviteRole === 'CANDIDATE' ? 'Candidate profile and account created. ' : 'Invitation created. '}
+                  Share this one-time link with the user. They must set a password before signing in:
                   <a href={invitation.invitationUrl}>{invitation.invitationUrl}</a>
                 </div>
               )}
               {invitation && !invitation.invitationUrl && (
                 <div className="database-read-only" role="status">
-                  Invitation created. A password setup link was emailed to {invitation.user.email}. They set their own password there, then sign in with this email address.
+                  {inviteRole === 'CANDIDATE' ? 'Candidate profile and account created. ' : 'Invitation created. '}
+                  A password setup link was emailed to {invitation.user.email}. They set their own password there, then sign in with this email address.
                 </div>
               )}
               <div className="customer-modal-actions">
                 <button type="button" className="btn btn-outline" onClick={() => setInviteRole(null)}>Close</button>
-                {!invitation && <button type="submit" className="btn btn-primary" disabled={inviteBusy}>{inviteBusy ? 'Creating…' : 'Create invitation'}</button>}
+                {!invitation && (
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    disabled={inviteBusy || (inviteRole === 'CUSTOMER' && (loadingCustomerOptions || !inviteCustomer))}
+                  >
+                    {inviteBusy ? 'Creating…' : 'Create invitation'}
+                  </button>
+                )}
               </div>
             </form>
           </div>

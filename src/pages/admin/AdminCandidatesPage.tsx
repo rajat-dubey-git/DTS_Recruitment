@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Download, Search, ShieldCheck, UserRound } from 'lucide-react'
+import PaginationControls, { useListPagination } from '../../components/PaginationControls'
 
 type AdminCandidate = {
   candidate_id: number
@@ -39,7 +40,7 @@ type CandidateDetails = {
   }
   education: Array<{ education_id: number; qualification: string; specialization: string | null; institution: string | null; passing_year: number | null; grade_or_percentage: string | null }>
   experience: Array<{ experience_id: number; employer_name: string; designation: string; start_date: string | null; end_date: string | null; is_current: number }>
-  skills: Array<{ skill_id: number; skill_name: string; skill_category: string | null; experience_years: number | null; proficiency: string | null }>
+  skills: Array<{ skill_id: number; skill_name: string; skill_category: string | null; experience_years: number | string | null; proficiency: string | null }>
   documents: CandidateDocument[]
 }
 
@@ -75,6 +76,7 @@ export default function AdminCandidatesPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const candidatePage = useListPagination(candidates, query)
 
   async function loadCandidates(searchTerm = query) {
     const params = new URLSearchParams()
@@ -167,7 +169,7 @@ export default function AdminCandidatesPage() {
         <section className="space-y-3">
           {loading && <div className="panel database-message" role="status">Loading candidates…</div>}
           {!loading && candidates.length === 0 && <div className="panel database-message">No candidate records match this search.</div>}
-          {candidates.map((candidate) => (
+          {candidatePage.items.map((candidate) => (
             <button
               type="button"
               key={candidate.candidate_id}
@@ -191,6 +193,12 @@ export default function AdminCandidatesPage() {
               </div>
             </button>
           ))}
+          <PaginationControls
+            page={candidatePage.page}
+            pageCount={candidatePage.pageCount}
+            total={candidatePage.total}
+            onPageChange={candidatePage.setPage}
+          />
         </section>
 
         <section className="min-w-0 rounded-xl border border-slate-200 bg-white p-5">

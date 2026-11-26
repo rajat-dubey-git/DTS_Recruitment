@@ -1,15 +1,23 @@
 
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 import {
   Bell,
+  Check,
   LogOut,
   Menu,
 } from 'lucide-react'
 
 import { useAuth } from '../context/AuthContext'
 import { navByRole } from '../data/navigation'
+import { notificationsApi } from '../api/notifications'
+import type { NotificationItem } from '../api/notifications'
+
+function notificationDate(value: string) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
 
 export default function AppLayout() {
   const { user, logout } = useAuth()
@@ -17,6 +25,29 @@ export default function AppLayout() {
   const location = useLocation()
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [logoutError, setLogoutError] = useState('')
+  const [notificationPanelOpen, setNotificationPanelOpen] = useState(false)
+  const [notifications, setNotifications] = useState<NotificationItem[]>([])
+  const [unreadCount, setUnreadCount] = useState(0)
+  const [notificationError, setNotificationError] = useState('')
+  const [notificationBusy, setNotificationBusy] = useState(false)
+
+  const loadNotifications = useCallback(async () => {
+    if (!user?.userId) return
+    try {
+      const result = await notificationsApi.list()
+      setNotifications(result.notifications)
+      setUnreadCount(result.unreadCount)
+      setNotificationError('')
+    } catch (error) {
+      setNotificationError(error instanceof Error ? error.message : 'Unable to load notifications.')
+    }
+  }, [user?.userId])
+
+  useEffect(() => {
+    void loadNotifications()
+    const timer = window.setInterval(() => void loadNotifications(), 60000)
+    return () => window.clearInterval(timer)
+  }, [loadNotifications])
 
   if (!user) return null
 
@@ -27,6 +58,45 @@ export default function AppLayout() {
   )
 
   const pageTitle = currentPage?.label ?? 'Workspace'
+
+  const openNotification = async (notification: NotificationItem) => {
+    setNotificationBusy(true)
+    setNotificationError('')
+    try {
+      if (!notification.read_at) {
+        await notificationsApi.markRead(notification.notification_id)
+        const readAt = new Date().toISOString()
+        setNotifications((current) => current.map((item) => item.notification_id === notification.notification_id
+          ? { ...item, read_at: readAt }
+          : item))
+        setUnreadCount((count) => Math.max(0, count - 1))
+      }
+      const target = notification.target_url?.startsWith('/app/')
+        ? notification.target_url
+        : '/app/dashboard'
+      setNotificationPanelOpen(false)
+      navigate(target)
+    } catch (error) {
+      setNotificationError(error instanceof Error ? error.message : 'Unable to open this notification.')
+    } finally {
+      setNotificationBusy(false)
+    }
+  }
+
+  const markAllRead = async () => {
+    setNotificationBusy(true)
+    setNotificationError('')
+    try {
+      await notificationsApi.markAllRead()
+      const readAt = new Date().toISOString()
+      setNotifications((current) => current.map((item) => ({ ...item, read_at: item.read_at ?? readAt })))
+      setUnreadCount(0)
+    } catch (error) {
+      setNotificationError(error instanceof Error ? error.message : 'Unable to mark notifications as read.')
+    } finally {
+      setNotificationBusy(false)
+    }
+  }
 
   return (
     <div className="app-shell">
@@ -105,15 +175,61 @@ export default function AppLayout() {
           </div>
 
           <div className="top-actions">
-            <button
-              className="icon-button"
-              type="button"
-              title="Notifications"
-              aria-label="Notifications"
-              onClick={() => void navigate('/app/dashboard')}
-            >
-              <Bell size={17} />
-            </button>
+            <div className="notification-menu">
+              <button
+                className="icon-button notification-button"
+                type="button"
+                title="Notifications"
+                aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ''}`}
+                aria-expanded={notificationPanelOpen}
+                onClick={() => {
+                  setNotificationPanelOpen((open) => !open)
+                  if (!notificationPanelOpen) void loadNotifications()
+                }}
+              >
+                <Bell size={17} />
+                {unreadCount > 0 && <span className="notification-count">{unreadCount > 99 ? '99+' : unreadCount}</span>}
+              </button>
+              {notificationPanelOpen && (
+                <section className="notification-panel" aria-label="Notifications">
+                  <div className="notification-panel-heading">
+                    <div>
+                      <strong>Notifications</strong>
+                      <small>{unreadCount} unread</small>
+                    </div>
+                    <button
+                      type="button"
+                      className="notification-mark-all"
+                      disabled={notificationBusy || unreadCount === 0}
+                      onClick={() => void markAllRead()}
+                    >
+                      <Check size={14} /> Mark all read
+                    </button>
+                  </div>
+                  {notificationError && <p className="notification-error" role="alert">{notificationError}</p>}
+                  <div className="notification-list">
+                    {notifications.length === 0 ? (
+                      <p className="notification-empty">You’re all caught up.</p>
+                    ) : notifications.map((notification) => (
+                      <button
+                        key={notification.notification_id}
+                        type="button"
+                        className={`notification-item ${notification.read_at ? '' : 'unread'}`}
+                        disabled={notificationBusy}
+                        onClick={() => void openNotification(notification)}
+                      >
+                        <span className="notification-item-dot" />
+                        <span className="notification-item-content">
+                          <strong>{notification.title}</strong>
+                          <span>{notification.message}</span>
+                          <small>{notificationDate(notification.created_at)}</small>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
 
             <div className="user-menu">
 

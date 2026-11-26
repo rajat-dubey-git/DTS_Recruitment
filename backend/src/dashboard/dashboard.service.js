@@ -1,4 +1,5 @@
 import { pool } from '../config/db.js'
+import { getCandidateProfileForUser } from '../candidate/account-link.service.js'
 
 function count(value) {
   const parsed = Number(value ?? 0)
@@ -68,13 +69,31 @@ async function adminAnalytics() {
 }
 
 async function customerAnalytics(userId) {
+  const [contacts] = await pool.execute(
+    `SELECT cc.customer_id
+     FROM customer_contacts cc
+     INNER JOIN users u ON u.user_id = cc.user_id
+     WHERE cc.user_id = ? AND cc.status = 'ACTIVE'
+       AND u.role = 'CUSTOMER' AND u.status = 'ACTIVE'
+     ORDER BY cc.is_primary DESC, cc.contact_id
+     LIMIT 1`,
+    [userId],
+  )
+  if (!contacts[0]) {
+    throw Object.assign(new Error('No active customer organisation is linked to this account.'), {
+      statusCode: 403,
+    })
+  }
+  const customerId = Number(contacts[0].customer_id)
+
   const [[summaryRows], [requirementRows], [applicationRows]] = await Promise.all([
     pool.execute(
       `SELECT
-         COUNT(DISTINCT r.requirement_id) AS totalRequirements,
+         COUNT(DISTINCT r.requirement_id) + COUNT(DISTINCT submitted.intake_id) AS totalRequirements,
          COUNT(DISTINCT CASE
            WHEN r.status IN ('PENDING_APPROVAL','APPROVED','OPEN','ON_HOLD')
-           THEN r.requirement_id END) AS activeRequirements,
+           THEN r.requirement_id END) + COUNT(DISTINCT submitted.intake_id) AS activeRequirements,
+         COUNT(DISTINCT submitted.intake_id) AS submittedRequests,
          COUNT(DISTINCT CASE
            WHEN shared_contact.contact_id IS NOT NULL
              AND shared_user.user_id IS NOT NULL
@@ -85,67 +104,71 @@ async function customerAnalytics(userId) {
              AND i.status = 'SCHEDULED'
              AND i.scheduled_start >= CURRENT_TIMESTAMP
            THEN i.interview_id END) AS upcomingInterviews
-       FROM customer_contacts cc
-       INNER JOIN users contact_user ON contact_user.user_id = cc.user_id
-       LEFT JOIN agreements a ON a.customer_id = cc.customer_id
+       FROM customers customer
+       LEFT JOIN agreements a ON a.customer_id = customer.customer_id
        LEFT JOIN service_orders so ON so.agreement_id = a.agreement_id
        LEFT JOIN job_requirements r ON r.service_order_id = so.service_order_id
+       LEFT JOIN customer_requirement_intakes submitted
+         ON submitted.customer_id = customer.customer_id
+         AND submitted.status = 'SUBMITTED'
        LEFT JOIN applications ap ON ap.requirement_id = r.requirement_id
        LEFT JOIN resume_shares rs
          ON rs.application_id = ap.application_id
          AND rs.status IN ('SHARED','VIEWED','EXPIRED')
        LEFT JOIN customer_contacts shared_contact
          ON shared_contact.contact_id = rs.shared_with_contact_id
-         AND shared_contact.customer_id = cc.customer_id
+         AND shared_contact.customer_id = customer.customer_id
          AND shared_contact.status = 'ACTIVE'
        LEFT JOIN users shared_user
          ON shared_user.user_id = shared_contact.user_id
          AND shared_user.role = 'CUSTOMER'
          AND shared_user.status = 'ACTIVE'
        LEFT JOIN interviews i ON i.application_id = ap.application_id
-       WHERE cc.user_id = ? AND cc.status = 'ACTIVE'
-         AND contact_user.role = 'CUSTOMER'
-         AND contact_user.status = 'ACTIVE'`,
-      [userId],
+       WHERE customer.customer_id = ?
+       GROUP BY customer.customer_id`,
+      [customerId],
     ),
     pool.execute(
-      `SELECT r.status AS label, COUNT(DISTINCT r.requirement_id) AS value
-       FROM customer_contacts cc
-       INNER JOIN users contact_user ON contact_user.user_id = cc.user_id
-       INNER JOIN agreements a ON a.customer_id = cc.customer_id
-       INNER JOIN service_orders so ON so.agreement_id = a.agreement_id
-       INNER JOIN job_requirements r ON r.service_order_id = so.service_order_id
-       WHERE cc.user_id = ? AND cc.status = 'ACTIVE'
-         AND contact_user.role = 'CUSTOMER'
-         AND contact_user.status = 'ACTIVE'
-       GROUP BY r.status
-       ORDER BY r.status`,
-      [userId],
+      `SELECT requirement_status.label, requirement_status.value
+       FROM (
+         SELECT r.status AS label, COUNT(DISTINCT r.requirement_id) AS value
+         FROM agreements a
+         INNER JOIN service_orders so ON so.agreement_id = a.agreement_id
+         INNER JOIN job_requirements r ON r.service_order_id = so.service_order_id
+         WHERE a.customer_id = ?
+         GROUP BY r.status
+         UNION ALL
+         SELECT 'SUBMITTED' AS label, COUNT(*) AS value
+         FROM customer_requirement_intakes
+         WHERE customer_id = ? AND status = 'SUBMITTED'
+         HAVING COUNT(*) > 0
+       ) requirement_status
+       ORDER BY requirement_status.label`,
+      [customerId, customerId],
     ),
     pool.execute(
       `SELECT ap.status AS label, COUNT(DISTINCT ap.application_id) AS value
-       FROM customer_contacts cc
-       INNER JOIN users contact_user ON contact_user.user_id = cc.user_id
-       INNER JOIN agreements a ON a.customer_id = cc.customer_id
+       FROM agreements a
        INNER JOIN service_orders so ON so.agreement_id = a.agreement_id
        INNER JOIN job_requirements r ON r.service_order_id = so.service_order_id
        INNER JOIN applications ap ON ap.requirement_id = r.requirement_id
-       WHERE cc.user_id = ? AND cc.status = 'ACTIVE'
-         AND contact_user.role = 'CUSTOMER'
-         AND contact_user.status = 'ACTIVE'
+       WHERE a.customer_id = ?
          AND EXISTS (
            SELECT 1
            FROM resume_shares rs
            INNER JOIN customer_contacts shared_contact
              ON shared_contact.contact_id = rs.shared_with_contact_id
+           INNER JOIN users shared_user ON shared_user.user_id = shared_contact.user_id
            WHERE rs.application_id = ap.application_id
-             AND shared_contact.customer_id = cc.customer_id
+             AND shared_contact.customer_id = a.customer_id
              AND shared_contact.status = 'ACTIVE'
+             AND shared_user.role = 'CUSTOMER'
+             AND shared_user.status = 'ACTIVE'
              AND rs.status IN ('SHARED','VIEWED','EXPIRED')
          )
        GROUP BY ap.status
        ORDER BY ap.status`,
-      [userId],
+      [customerId],
     ),
   ])
   const summary = summaryRows[0] ?? {}
@@ -154,6 +177,7 @@ async function customerAnalytics(userId) {
     metrics: [
       metric('totalRequirements', 'All requirements', summary.totalRequirements),
       metric('activeRequirements', 'Active requirements', summary.activeRequirements),
+      metric('submittedRequests', 'Requests awaiting review', summary.submittedRequests),
       metric('submittedCandidates', 'Candidates shared with your company', summary.submittedCandidates),
       metric('upcomingInterviews', 'Upcoming interviews', summary.upcomingInterviews),
     ],
@@ -226,16 +250,9 @@ async function recruiterAnalytics(userId) {
 }
 
 async function candidateAnalytics(userId) {
-  const [rows] = await pool.execute(
-    `SELECT candidate_id
-     FROM candidates
-     WHERE user_id = ?
-     LIMIT 1`,
-    [userId],
-  )
-  const candidate = rows[0]
+  const candidate = await getCandidateProfileForUser(userId)
   if (!candidate) {
-    throw Object.assign(new Error('Your candidate profile is not linked to this account. Contact an administrator.'), {
+    throw Object.assign(new Error('This account is not an active candidate account.'), {
       statusCode: 409,
     })
   }

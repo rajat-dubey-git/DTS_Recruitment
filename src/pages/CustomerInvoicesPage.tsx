@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Download, Search } from 'lucide-react'
 import { workspaceApi } from '../api/workspace'
+import type { CustomerInvoice } from '../api/workspace'
+import PaginationControls, { useListPagination } from '../components/PaginationControls'
 
 export default function CustomerInvoicesPage() {
-  const [invoices, setInvoices] = useState<any[]>([])
+  const [invoices, setInvoices] = useState<CustomerInvoice[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
@@ -27,11 +29,13 @@ export default function CustomerInvoicesPage() {
 
   const query = search.trim().toLowerCase()
   const filteredInvoices = invoices.filter((inv) =>
-    (inv.invoice_number?.toLowerCase()?.includes(query) ?? false) ||
-    (inv.date?.toLowerCase()?.includes(query) ?? false) ||
-    (inv.total_amount?.toString()?.toLowerCase()?.includes(query) ?? false) ||
-    (inv.status?.toLowerCase()?.includes(query) ?? false)
+    inv.invoice_number.toLowerCase().includes(query) ||
+    inv.invoice_date.toLowerCase().includes(query) ||
+    String(inv.total_amount).toLowerCase().includes(query) ||
+    inv.status.toLowerCase().includes(query) ||
+    inv.order_number.toLowerCase().includes(query)
   )
+  const invoicePage = useListPagination(filteredInvoices, search)
 
   return (
     <div className="dashboard">
@@ -75,10 +79,10 @@ export default function CustomerInvoicesPage() {
               </tr>
             </thead>
             <tbody>
-              {!loading && filteredInvoices.map((invoice, index) => (
+              {!loading && invoicePage.items.map((invoice, index) => (
                 <tr key={invoice.invoice_id ?? invoice.invoice_number ?? index}>
                   <td>{invoice.invoice_number ?? '—'}</td>
-                  <td>{invoice.date ?? '—'}</td>
+                  <td>{invoice.invoice_date ?? '—'}</td>
                   <td>{invoice.due_date ?? '—'}</td>
                   <td>{invoice.total_amount ?? '—'}</td>
                   <td>{invoice.status ?? '—'}</td>
@@ -106,7 +110,7 @@ export default function CustomerInvoicesPage() {
                       <strong>No invoices found</strong>
                       <span>
                         {invoices.length === 0
-                          ? 'Invoices will appear here after agreement approval.'
+                          ? 'Issued invoices will appear here when the DTS team makes them available.'
                           : 'Try adjusting your search query.'}
                       </span>
                     </div>
@@ -126,6 +130,14 @@ export default function CustomerInvoicesPage() {
             </tbody>
           </table>
         </div>
+        {!loading && (
+          <PaginationControls
+            page={invoicePage.page}
+            pageCount={invoicePage.pageCount}
+            total={invoicePage.total}
+            onPageChange={invoicePage.setPage}
+          />
+        )}
       </section>
     </div>
   )

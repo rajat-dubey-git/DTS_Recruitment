@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { ArrowRight, BriefcaseBusiness, FileText, UserRound, Users } from 'lucide-react'
 import { candidateApi } from '../api/candidate'
 import type { CandidateDashboardApplication } from '../api/candidate'
+import PaginationControls, { useListPagination } from '../components/PaginationControls'
 
 type Dashboard = Awaited<ReturnType<typeof candidateApi.dashboard>>
 
@@ -10,6 +11,7 @@ export default function CandidateDashboardPage() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const recentApplications = useListPagination(dashboard?.applications ?? [])
 
   useEffect(() => {
     let active = true
@@ -75,7 +77,7 @@ export default function CandidateDashboardPage() {
             </Link>
           </div>
           <div className="mt-4 divide-y divide-slate-100">
-            {dashboard.applications.length ? dashboard.applications.map((application: CandidateDashboardApplication) => (
+            {recentApplications.total ? recentApplications.items.map((application: CandidateDashboardApplication) => (
               <div key={application.application_id} className="flex items-center justify-between gap-4 py-3">
                 <div>
                   <p className="text-sm font-medium text-slate-800">Application #{application.application_id}</p>
@@ -89,6 +91,12 @@ export default function CandidateDashboardPage() {
               <p className="py-6 text-sm text-slate-500">You have not applied to any requirements yet.</p>
             )}
           </div>
+          <PaginationControls
+            page={recentApplications.page}
+            pageCount={recentApplications.pageCount}
+            total={recentApplications.total}
+            onPageChange={recentApplications.setPage}
+          />
         </section>
 
         <section className="rounded-xl border border-slate-200 bg-white p-6">
