@@ -9,6 +9,7 @@ import {
   Building,
   CheckCircle,
   AlertCircle,
+  RefreshCw,
 } from 'lucide-react'
 import { CustomerSharedCandidate } from '../types/recruitment'
 import { fetchCustomerSharedCandidates, submitCandidateDecision } from '../api/recruitment'
@@ -83,6 +84,15 @@ export default function CustomerCandidatesPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void loadSharedCandidates()}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
           <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 text-xs font-semibold rounded-lg border border-blue-200">
             <Users className="w-4 h-4" />
             {candidates.length} Profiles Presented

@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { pool } from '../config/db.js'
 import { resolvePrivateStoragePath } from '../agreements/document-storage.js'
+import { shareEligibleCandidateApplications } from '../recruiter/resume-sharing.service.js'
 
 function httpError(statusCode, message) {
   return Object.assign(new Error(message), { statusCode })
@@ -190,8 +191,15 @@ export async function reviewAdminCandidateDocument(req, res, next) {
         req.ip || null,
       ],
     )
+    const sharedCount = verificationStatus === 'VERIFIED' && malwareScanStatus === 'CLEAN'
+      ? await shareEligibleCandidateApplications(connection, candidateId, req.authUser.user_id)
+      : 0
     await connection.commit()
-    return res.json({ message: 'Resume review and scan result recorded.' })
+    return res.json({
+      message: sharedCount > 0
+        ? `Resume review recorded. ${sharedCount} candidate submission(s) were shared with customers.`
+        : 'Resume review and scan result recorded.',
+    })
   } catch (error) {
     await connection.rollback()
     return next(error)

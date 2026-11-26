@@ -91,6 +91,11 @@ export async function getCustomerSharedCandidates(req, res, next) {
       params.push(customerId)
     }
     sql += ` AND cc.status = 'ACTIVE'`
+    sql += ` AND rs.share_id = (
+      SELECT MAX(latest_share.share_id)
+      FROM resume_shares latest_share
+      WHERE latest_share.application_id = rs.application_id
+    )`
 
     sql += ` ORDER BY rs.shared_at DESC`
 

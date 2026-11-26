@@ -7,6 +7,9 @@ import {
   createNotification,
   notifyActiveCustomerContacts,
 } from '../notifications/notification.service.js'
+import {
+  createCustomerResumeShare,
+} from './resume-sharing.service.js'
 
 function httpError(statusCode, message) {
   return Object.assign(new Error(message), { statusCode })
@@ -1095,11 +1098,18 @@ export async function submitCandidateForRequirement(req, res, next) {
        VALUES (?, NULL, 'APPLIED', ?, 'Candidate submitted by recruiter.')`,
       [applicationId, req.authUser.user_id],
     )
+    const share = await createCustomerResumeShare(
+      connection,
+      Number(applicationId),
+      req.authUser.user_id,
+    )
     await connection.commit()
 
     return res.status(201).json({
       applicationId,
-      message: 'Candidate submitted successfully to requirement.',
+      message: share.shareId
+         ? 'Candidate submitted and shared with the customer for 24 hours.'
+         : `Candidate submitted. ${share.reason}`,
     })
   } catch (error) {
     await connection.rollback()
@@ -1120,17 +1130,12 @@ export async function createSecureResumeShare(req, res, next) {
     }
 
     const [apps] = await connection.execute(
-      `SELECT a.application_id, a.requirement_id, a.candidate_id,
-              agreement.customer_id, a.recruiter_id
+      `SELECT a.application_id, a.requirement_id, a.recruiter_id
        FROM applications a
-       JOIN job_requirements r ON r.requirement_id = a.requirement_id
-       JOIN service_orders so ON so.service_order_id = r.service_order_id
-       JOIN agreements agreement ON agreement.agreement_id = so.agreement_id
        WHERE a.application_id = ?
        FOR UPDATE`,
       [applicationId],
     )
-
     if (!apps[0]) throw httpError(404, 'Application not found.')
     const appData = apps[0]
 
@@ -1144,67 +1149,20 @@ export async function createSecureResumeShare(req, res, next) {
       if (!assigned[0]) throw httpError(403, 'This application is not assigned to you.')
     }
 
-    const [consents] = await connection.execute(
-      `SELECT candidate_consent_id
-       FROM candidate_consents
-       WHERE candidate_id = ? AND requirement_id = ? AND customer_id = ?
-         AND withdrawn_at IS NULL
-       LIMIT 1`,
-      [appData.candidate_id, appData.requirement_id, appData.customer_id],
+    const share = await createCustomerResumeShare(
+      connection,
+      applicationId,
+      req.authUser.user_id,
     )
-    if (!consents[0]) throw httpError(409, 'Active candidate consent is required before sharing a resume.')
-
-    const [contacts] = await connection.execute(
-      `SELECT cc.contact_id, cc.user_id
-       FROM customer_contacts cc
-       INNER JOIN users u ON u.user_id = cc.user_id
-       WHERE cc.customer_id = ? AND cc.status = 'ACTIVE'
-         AND u.role = 'CUSTOMER' AND u.status = 'ACTIVE'
-       ORDER BY cc.is_primary DESC, cc.contact_id
-       LIMIT 1`,
-      [appData.customer_id],
-    )
-    if (!contacts[0]) throw httpError(409, 'No active customer contact is available to receive the resume share.')
-
-    const [documents] = await connection.execute(
-      `SELECT document_id
-       FROM candidate_documents
-       WHERE candidate_id = ? AND document_type = 'RESUME' AND is_current = 1
-         AND verification_status = 'VERIFIED' AND malware_scan_status = 'CLEAN'
-       ORDER BY uploaded_at DESC
-       LIMIT 1`,
-      [appData.candidate_id],
-    )
-    if (!documents[0]) {
-      throw httpError(409, 'A verified, security-cleared resume is required before sharing with a customer.')
-    }
-
-    const [shareResult] = await connection.execute(
-      `INSERT INTO resume_shares
-        (application_id, shared_with_contact_id, document_id, shared_by, access_expires_at, status)
-       VALUES (?, ?, ?, ?, DATE_ADD(CURRENT_TIMESTAMP, INTERVAL 24 HOUR), 'SHARED')`,
-      [applicationId, contacts[0].contact_id, documents[0].document_id, req.authUser.user_id],
-    )
-
-    const shareId = shareResult.insertId
-
-    await connection.execute(
-      `INSERT INTO resume_share_events (share_id, event_code, actor_user_id)
-       VALUES (?, 'CREATED', ?)`,
-      [shareId, req.authUser.user_id],
-    )
-    await notifyActiveCustomerContacts(connection, Number(appData.customer_id), {
-      type: 'CANDIDATE_SHARED',
-      title: 'Candidate profile shared',
-      message: 'A recruiter shared a candidate profile and verified resume with your organization.',
-      targetUrl: '/app/candidates',
-    })
+    if (!share.shareId) throw httpError(409, share.reason)
 
     await connection.commit()
 
     return res.status(201).json({
-      shareId,
-      message: 'A 24-hour resume share was created for the customer.',
+      shareId: share.shareId,
+      message: share.alreadyShared
+        ? 'An active resume share is already available to the customer.'
+        : 'A 24-hour resume share was created for the customer.',
     })
   } catch (error) {
     await connection.rollback()

@@ -544,15 +544,15 @@ export async function uploadMyResume(req, res, next) {
     try {
       await connection.beginTransaction()
       await connection.execute(
-        'UPDATE candidate_documents SET is_current = 0, current_resume_marker = 0 WHERE candidate_id = ? AND document_type = ?',
+        'UPDATE candidate_documents SET is_current = 0 WHERE candidate_id = ? AND document_type = ?',
         [candidate.candidate_id, 'RESUME'],
       )
       const sha256 = createHash('sha256').update(req.file.buffer).digest('hex')
       const [result] = await connection.execute(
         `INSERT INTO candidate_documents
          (candidate_id, document_type, file_name, file_path, is_current, verification_status,
-          uploaded_by, file_size_bytes, detected_mime_type, sha256, malware_scan_status, current_resume_marker)
-         VALUES (?, 'RESUME', ?, ?, 1, 'PENDING', ?, ?, 'application/pdf', ?, 'PENDING', 1)`,
+          uploaded_by, file_size_bytes, detected_mime_type, sha256, malware_scan_status)
+         VALUES (?, 'RESUME', ?, ?, 1, 'PENDING', ?, ?, 'application/pdf', ?, 'PENDING')`,
         [candidate.candidate_id, req.file.originalname, path.join(relativeDirectory, fileName), req.authUser.user_id, req.file.size, sha256],
       )
       await connection.commit()
