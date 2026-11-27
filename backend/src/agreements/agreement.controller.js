@@ -14,7 +14,7 @@ import {
   requestAdminAgreementDecision,
   requestCustomerAgreementChanges,
   saveAdminAgreementTerms,
-  uploadSignedAgreement,
+  signCustomerAgreement as signCustomerAgreementService,
 } from './agreement.service.js'
 import { archiveDownloadCopy } from './document-storage.js'
 
@@ -186,13 +186,13 @@ export function downloadAdminAgreement(req, res, next) {
   ), 'admin')
 }
 
-export async function uploadCustomerSignedCopy(req, res, next) {
+export async function signCustomerAgreement(req, res, next) {
   try {
-    const agreement = await uploadSignedAgreement(
+    const agreement = await signCustomerAgreementService(
       req.authUser,
       req.params.agreementId,
       req.params.versionId,
-      req.file,
+      req.body,
     )
     return res.json(agreement)
   } catch (error) {

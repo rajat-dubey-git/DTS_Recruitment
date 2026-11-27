@@ -1,6 +1,4 @@
-import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
-import multer from 'multer'
 import { requireAdmin, requireAuth } from '../auth/auth.middleware.js'
 import {
   activateAdminAgreement,
@@ -19,12 +17,10 @@ import {
   reviewAdminAgreement,
   updateAdminAgreementTerms,
   provisionAdminAgreementOrders,
-  uploadCustomerSignedCopy,
+  signCustomerAgreement,
 } from './agreement.controller.js'
-import { ensurePrivateStorageDirectory } from './document-storage.js'
 
 const router = Router()
-const maximumPdfSize = 50 * 1024 * 1024
 
 function requireCustomer(req, res, next) {
   if (req.authUser?.role !== 'CUSTOMER') {
@@ -32,31 +28,6 @@ function requireCustomer(req, res, next) {
   }
   return next()
 }
-
-function uploadError(message) {
-  return Object.assign(new Error(message), { statusCode: 400 })
-}
-
-const signedPdfUpload = multer({
-  storage: multer.diskStorage({
-    destination(_req, _file, callback) {
-      ensurePrivateStorageDirectory('tmp').then(
-        (directory) => callback(null, directory),
-        (error) => callback(error),
-      )
-    },
-    filename(_req, _file, callback) {
-      callback(null, `${randomUUID()}.upload`)
-    },
-  }),
-  limits: { fileSize: maximumPdfSize, files: 1 },
-  fileFilter(_req, file, callback) {
-    if (file.mimetype !== 'application/pdf' || !/\.pdf$/i.test(file.originalname)) {
-      return callback(uploadError('Upload a PDF file only.'))
-    }
-    return callback(null, true)
-  },
-})
 
 router.use(requireAuth)
 
@@ -75,10 +46,9 @@ router.get(
   downloadCustomerSignedCopy,
 )
 router.post(
-  '/customer/:agreementId/versions/:versionId/signed-copy',
+  '/customer/:agreementId/versions/:versionId/sign',
   requireCustomer,
-  signedPdfUpload.single('signedPdf'),
-  uploadCustomerSignedCopy,
+  signCustomerAgreement,
 )
 router.post(
   '/customer/:agreementId/versions/:versionId/request-changes',

@@ -46,7 +46,7 @@ export async function listAdminInvoices(_req, res, next) {
        GROUP BY i.invoice_id, i.invoice_number, i.invoice_type, i.invoice_date, i.due_date,
                 i.subtotal, i.discount_amount, i.tax_total, i.total_amount, i.status,
                 so.order_number, a.agreement_number, c.company_name
-       ORDER BY i.invoice_date DESC, i.invoice_id DESC
+       ORDER BY i.invoice_id DESC
        LIMIT 250`,
     )
     return res.json({ invoices })

@@ -1,6 +1,6 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { CheckCircle, Download, FileCheck2, FileText, Info, Plus, Send, Trash2, Upload } from 'lucide-react'
+import { CheckCircle, Download, FileCheck2, FileText, Info, Plus, Send, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useNavigate } from 'react-router-dom'
 import { workspaceApi } from '../api/workspace'
@@ -13,6 +13,7 @@ import type {
 import AgreementSampleTemplateModal from '../components/AgreementSampleTemplateModal'
 import PaginationControls, { useListPagination } from '../components/PaginationControls'
 import { v4 as uuidv4 } from 'uuid'
+import { useAuth } from '../context/AuthContext'
 
 type DraftLine = {
   serviceTypeId: string
@@ -68,6 +69,9 @@ function AgreementDetailPanel({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [changeRequest, setChangeRequest] = useState('')
+  const { user } = useAuth()
+  const [signatureName, setSignatureName] = useState(user?.fullName ?? '')
+  const [signatureConsent, setSignatureConsent] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -116,37 +120,29 @@ function AgreementDetailPanel({
     void download(kind)
   }
 
-  const upload = async (event: FormEvent<HTMLFormElement>) => {
+  const signAgreement = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!detail?.version) return
-    const form = event.currentTarget
-    const input = form.elements.namedItem('signedPdf')
-    const file = input instanceof HTMLInputElement ? input.files?.[0] : undefined
-    if (!file) {
-      setError('Choose the signed PDF to upload.')
-      return
-    }
-    if (file.type !== 'application/pdf' || !file.name.toLowerCase().endsWith('.pdf')) {
-      setError('Upload a PDF file only.')
-      return
-    }
-    if (file.size > 50 * 1024 * 1024) {
-      setError('PDF must not exceed 50 MB.')
+    if (!signatureConsent) {
+      setError('Confirm that you agree to sign this agreement electronically.')
       return
     }
     setBusy(true)
     setError('')
     try {
-      const result = await workspaceApi.uploadSignedAgreement(
+      const result = await workspaceApi.signAgreement(
         agreementId,
         detail.version.agreementVersionId,
-        file,
+        {
+          fullName: signatureName,
+          acceptedElectronicSignature: signatureConsent,
+        },
       )
       setDetail(result)
-      form.reset()
+      setSignatureConsent(false)
       onChanged()
-    } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : 'Unable to upload the signed agreement.')
+    } catch (signError) {
+      setError(signError instanceof Error ? signError.message : 'Unable to sign the agreement.')
     } finally {
       setBusy(false)
     }
@@ -227,11 +223,35 @@ function AgreementDetailPanel({
 
           {detail.version?.status === 'PENDING_CUSTOMER_SIGNATURE' && (
             <>
-              <form className="agreement-upload-form" onSubmit={(event) => void upload(event)}>
-                <label htmlFor="signedPdf">Signed agreement PDF (maximum 50 MB)</label>
-                <input id="signedPdf" name="signedPdf" type="file" accept=".pdf,application/pdf" required />
+              <form className="agreement-sign-form" onSubmit={(event) => void signAgreement(event)}>
+                <h3>Sign this agreement electronically</h3>
+                <p>
+                  Enter your full legal name and confirm your intent to sign electronically.
+                  The signed copy will be recorded for administrator review.
+                </p>
+                <label htmlFor="agreementSignatureName">Full legal name</label>
+                <input
+                  id="agreementSignatureName"
+                  name="fullName"
+                  type="text"
+                  autoComplete="name"
+                  maxLength={200}
+                  required
+                  value={signatureName}
+                  onChange={(event) => setSignatureName(event.target.value)}
+                />
+                <label className="agreement-sign-consent">
+                  <input
+                    type="checkbox"
+                    checked={signatureConsent}
+                    onChange={(event) => setSignatureConsent(event.target.checked)}
+                  />
+                  <span>
+                    I agree to use an electronic signature and intend my typed full name to sign this agreement.
+                  </span>
+                </label>
                 <button type="submit" className="btn btn-primary" disabled={busy}>
-                  <Upload size={15} /> {busy ? 'Uploadingâ€¦' : 'Upload signed PDF'}
+                  <FileCheck2 size={15} /> {busy ? 'Recording signature...' : 'Sign agreement'}
                 </button>
               </form>
               <form className="agreement-change-form" onSubmit={(event) => void requestChanges(event)}>

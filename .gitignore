@@ -13,6 +13,7 @@ database_additive_migration.sql
 !database_add_customer_candidate_decisions.sql
 !database_migration_user_deletion_and_invoice_selection.sql
 !database_migration_requirement_skills.sql
+!database_migration_digital_agreement_signature.sql
 *.txt
 .kilo/
 DTS_Private_Storage/

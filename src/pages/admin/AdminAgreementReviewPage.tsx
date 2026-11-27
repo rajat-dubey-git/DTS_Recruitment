@@ -517,7 +517,12 @@ export default function AdminAgreementReviewPage() {
               <div className="panel-heading">
                 <div>
                   <h3>Activate signed agreement</h3>
-                  <p>Customer has uploaded the signed PDF. Verify and activate the agreement.</p>
+                  <p>
+                    {detail.version?.customerSignatureName
+                      ? `${detail.version.customerSignatureName} digitally signed this agreement.`
+                      : 'The customer digitally signed this agreement.'}
+                    {' '}Verify the signed PDF and activate the agreement.
+                  </p>
                 </div>
               </div>
               {canDownloadSigned && (

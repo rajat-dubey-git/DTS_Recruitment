@@ -69,32 +69,6 @@ export async function fileMetadata(filePath) {
   }
 }
 
-export async function storeSignedPdf(tempPath, agreementId, versionNumber) {
-  const fileHandle = await open(tempPath, 'r')
-  try {
-    const header = Buffer.alloc(5)
-    const { bytesRead } = await fileHandle.read(header, 0, header.length, 0)
-    if (bytesRead !== 5 || header.toString('ascii') !== '%PDF-') {
-      throw storageError('Upload must be a valid PDF file.', 400)
-    }
-  } finally {
-    await fileHandle.close()
-  }
-
-  const relativeDirectory = path.join('agreements', String(agreementId))
-  const directory = await ensurePrivateStorageDirectory(relativeDirectory)
-  const fileName = `signed-v${versionNumber}-${randomUUID()}.pdf`
-  const destination = path.join(directory, fileName)
-  await rename(tempPath, destination)
-  const metadata = await fileMetadata(destination)
-
-  return {
-    storageKey: path.join(relativeDirectory, fileName),
-    absolutePath: destination,
-    ...metadata,
-  }
-}
-
 export async function storePrivatePdf(tempPath, relativeDirectory, namePrefix) {
   const fileHandle = await open(tempPath, 'r')
   try {
@@ -119,21 +93,26 @@ export async function storePrivatePdf(tempPath, relativeDirectory, namePrefix) {
   }
 }
 
-export async function createDraftPdf(agreementId, versionNumber, buildDocument) {
+async function createGeneratedAgreementPdf(agreementId, versionNumber, kind, buildDocument) {
   const relativeDirectory = path.join('agreements', String(agreementId))
   const directory = await ensurePrivateStorageDirectory(relativeDirectory)
-  const fileName = `draft-v${versionNumber}-${randomUUID()}.pdf`
+  const fileName = `${kind}-v${versionNumber}-${randomUUID()}.pdf`
   const absolutePath = path.join(directory, fileName)
   const document = buildDocument()
   const output = createWriteStream(absolutePath, { flags: 'wx' })
 
-  await new Promise((resolve, reject) => {
-    output.once('finish', resolve)
-    output.once('error', reject)
-    document.once('error', reject)
-    document.pipe(output)
-    document.end()
-  })
+  try {
+    await new Promise((resolve, reject) => {
+      output.once('finish', resolve)
+      output.once('error', reject)
+      document.once('error', reject)
+      document.pipe(output)
+      document.end()
+    })
+  } catch (error) {
+    await rm(absolutePath, { force: true })
+    throw error
+  }
 
   const metadata = await fileMetadata(absolutePath)
   return {
@@ -141,6 +120,14 @@ export async function createDraftPdf(agreementId, versionNumber, buildDocument) 
     absolutePath,
     ...metadata,
   }
+}
+
+export async function createDraftPdf(agreementId, versionNumber, buildDocument) {
+  return createGeneratedAgreementPdf(agreementId, versionNumber, 'draft', buildDocument)
+}
+
+export async function createSignedAgreementPdf(agreementId, versionNumber, buildDocument) {
+  return createGeneratedAgreementPdf(agreementId, versionNumber, 'signed', buildDocument)
 }
 
 export async function removePrivateFile(filePath) {

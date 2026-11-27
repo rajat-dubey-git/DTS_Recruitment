@@ -3,10 +3,10 @@ import PDFDocument from 'pdfkit'
 import { pool } from '../config/db.js'
 import {
   createDraftPdf,
+  createSignedAgreementPdf,
   fileMetadata,
   removePrivateFile,
   resolvePrivateStoragePath,
-  storeSignedPdf,
 } from './document-storage.js'
 import { notifyActiveCustomerContacts } from '../notifications/notification.service.js'
 import { notifyActiveAdmins } from '../notifications/notification.service.js'
@@ -321,7 +321,8 @@ async function getVersionRows(connection, agreementId) {
     `SELECT agreement_version_id, agreement_id, version_number, status,
             draft_document_path, signed_document_path, change_reason,
             internal_review_note, created_by, reviewed_by, reviewed_at,
-            customer_signed_by, signed_uploaded_at, activated_by, activated_at,
+            customer_signed_by, customer_signature_name, customer_signature_method,
+            signed_uploaded_at, activated_by, activated_at,
             created_at
      FROM agreement_versions
      WHERE agreement_id = ?
@@ -392,6 +393,8 @@ function serializeDetail(agreement, version, lines, events, customerView) {
           createdAt: version.created_at,
           reviewedAt: version.reviewed_at,
           signedUploadedAt: version.signed_uploaded_at,
+          customerSignatureName: customerView ? undefined : version.customer_signature_name,
+          customerSignatureMethod: customerView ? undefined : version.customer_signature_method,
           activatedAt: version.activated_at,
         }
       : null,
@@ -468,7 +471,7 @@ export async function listAdminAgreements() {
 async function getCurrentVersionForUpdate(connection, agreementId, versionId) {
   const [rows] = await connection.execute(
     `SELECT av.agreement_version_id, av.agreement_id, av.version_number, av.status,
-            av.created_by, av.draft_document_path, av.signed_document_path,
+            av.created_by, av.draft_document_path, av.draft_sha256, av.signed_document_path,
             av.signed_uploaded_at,
             a.customer_id, a.agreement_number, a.title, a.effective_date, a.expiry_date,
             c.company_name
@@ -566,11 +569,14 @@ export async function saveAdminAgreementTerms(agreementIdValue, versionIdValue, 
   }
 }
 
-function buildDraftDocument(agreement, version, lines) {
+function buildDraftDocument(agreement, version, lines, signature = null) {
   const doc = new PDFDocument({ size: 'A4', margin: 52, bufferPages: true })
   doc.fontSize(17).font('Helvetica-Bold').text('DTS RECRUITMENT SERVICES AGREEMENT', { align: 'center' })
   doc.moveDown(0.35)
-  doc.fontSize(10).font('Helvetica-Bold').fillColor('#a11').text('SAMPLE DRAFT - SUBJECT TO LEGAL AND COMMERCIAL APPROVAL', { align: 'center' })
+  doc.fontSize(10).font('Helvetica-Bold').fillColor('#a11').text(
+    signature ? 'ELECTRONICALLY SIGNED COPY' : 'SAMPLE DRAFT - SUBJECT TO LEGAL AND COMMERCIAL APPROVAL',
+    { align: 'center' },
+  )
   doc.fillColor('#111').moveDown()
   doc.fontSize(10).font('Helvetica')
   doc.text(`Agreement number: ${agreement.agreement_number}`)
@@ -604,10 +610,18 @@ function buildDraftDocument(agreement, version, lines) {
     { align: 'justify' },
   )
   doc.moveDown(2)
-  doc.font('Helvetica-Bold').text('For the customer')
-  doc.font('Helvetica').text('Authorized signatory: __________________________________')
-  doc.text('Name and designation: __________________________________')
-  doc.text('Date: ____________________')
+  if (signature) {
+    doc.font('Helvetica-Bold').text('Customer electronic signature')
+    doc.font('Helvetica').text(`Signed by: ${signature.fullName}`)
+    doc.text(`Customer account: ${signature.email}`)
+    doc.text(`Signed at (UTC): ${signature.signedAt}`)
+    doc.text('Method: Typed full name with affirmative electronic-signature consent.')
+  } else {
+    doc.font('Helvetica-Bold').text('For the customer')
+    doc.font('Helvetica').text('Authorized signatory: __________________________________')
+    doc.text('Name and designation: __________________________________')
+    doc.text('Date: ____________________')
+  }
   doc.moveDown()
   doc.font('Helvetica-Bold').text('For DTS')
   doc.font('Helvetica').text('Authorized signatory: __________________________________')
@@ -758,14 +772,14 @@ export async function requestAdminAgreementDecision(
         current.status,
         agreementStatus.SIGNATURE,
         adminUserId,
-        'Agreement approved. Download, sign, and upload the signed PDF.',
+        'Agreement approved. Review and sign the agreement electronically.',
         internalComment,
       ],
     )
     await notifyActiveCustomerContacts(updateConnection, Number(current.customer_id), {
       type: 'AGREEMENT_APPROVED_FOR_SIGNATURE',
       title: `Agreement ready to sign: ${current.agreement_number}`,
-      message: 'The agreement was approved. Download, sign, and upload the signed PDF.',
+      message: 'The agreement was approved. Review and sign the agreement electronically.',
       targetUrl: '/app/agreements',
     })
     await updateConnection.commit()
@@ -812,67 +826,96 @@ export async function getAgreementDocument(agreementIdValue, versionIdValue, doc
   }
 }
 
-export async function uploadSignedAgreement(user, agreementIdValue, versionIdValue, file) {
-  if (!file?.path) throw httpError('Select a signed PDF to upload.')
+export async function signCustomerAgreement(user, agreementIdValue, versionIdValue, input) {
   const agreementId = positiveId(agreementIdValue, 'Agreement')
   const versionId = positiveId(versionIdValue, 'Agreement version')
+  const fullName = validateText(input?.fullName, 'Full legal name', 200)
+  if (!fullName) throw httpError('Enter your full legal name to sign this agreement.')
+  if (input?.acceptedElectronicSignature !== true) {
+    throw httpError('Confirm that you agree to sign this agreement electronically.')
+  }
+
   let stored
+  const connection = await pool.getConnection()
   try {
-    const connection = await pool.getConnection()
-    try {
-      const version = await getCurrentVersionForUpdate(connection, agreementId, versionId)
-      if (!await customerHasAccess(user.user_id, version.customer_id, connection)) {
-        throw httpError('You do not have access to this agreement.', 403)
-      }
-      if (version.status !== agreementStatus.SIGNATURE) {
-        throw httpError('This agreement is not awaiting a signed copy.', 409)
-      }
-      stored = await storeSignedPdf(file.path, agreementId, version.version_number)
-      await connection.beginTransaction()
-      await connection.execute(
-        `UPDATE agreement_versions
-         SET status = ?, signed_document_path = ?, signed_sha256 = ?,
-             customer_signed_by = ?, signed_uploaded_at = CURRENT_TIMESTAMP
-         WHERE agreement_version_id = ? AND status = ?`,
-        [
-          agreementStatus.ACTIVATION,
-          stored.storageKey,
-          stored.sha256,
-          user.user_id,
-          versionId,
-          agreementStatus.SIGNATURE,
-        ],
-      )
-      await connection.execute(
-        `INSERT INTO agreement_events
-          (agreement_id, agreement_version_id, action_code, previous_status, new_status,
-           actor_user_id, customer_visible_comment)
-         VALUES (?, ?, 'SIGNED_COPY_UPLOADED', ?, ?, ?, 'Signed agreement uploaded for administrator verification.')`,
-        [
-          agreementId,
-          versionId,
-          agreementStatus.SIGNATURE,
-          agreementStatus.ACTIVATION,
-          user.user_id,
-        ],
-      )
-      await notifyActiveAdmins(connection, {
-        type: 'AGREEMENT_SIGNED_COPY_UPLOADED',
-        title: `Signed agreement uploaded: ${version.agreement_number}`,
-        message: 'A signed agreement copy is ready for administrator verification.',
-        targetUrl: `/app/admin/agreements/${agreementId}/review`,
-      })
-      await connection.commit()
-    } finally {
-      connection.release()
+    await connection.beginTransaction()
+    const version = await getCurrentVersionForUpdate(connection, agreementId, versionId)
+    if (!await customerHasAccess(user.user_id, version.customer_id, connection)) {
+      throw httpError('You do not have access to this agreement.', 403)
     }
-    return getCustomerAgreementDetail(user.user_id, agreementId)
+    if (version.status !== agreementStatus.SIGNATURE) {
+      throw httpError('This agreement is not awaiting a customer signature.', 409)
+    }
+    if (!version.draft_document_path || !version.draft_sha256) {
+      throw httpError('The approved agreement PDF is not available.', 409)
+    }
+
+    const draftPath = resolvePrivateStoragePath(version.draft_document_path)
+    const draftMetadata = await fileMetadata(draftPath)
+    if (draftMetadata.sha256 !== version.draft_sha256) {
+      throw httpError('The approved agreement PDF failed its integrity check.', 500)
+    }
+
+    const serviceLines = await getServiceLines(connection, versionId)
+    const signedAt = new Date().toISOString()
+    stored = await createSignedAgreementPdf(agreementId, version.version_number, () => (
+      buildDraftDocument(version, version, serviceLines, {
+        fullName,
+        email: user.email,
+        signedAt,
+      })
+    ))
+
+    const [updateResult] = await connection.execute(
+      `UPDATE agreement_versions
+       SET status = ?, signed_document_path = ?, signed_sha256 = ?,
+           customer_signed_by = ?, customer_signature_name = ?,
+           customer_signature_method = 'TYPED_NAME',
+           signed_uploaded_at = CURRENT_TIMESTAMP
+       WHERE agreement_version_id = ? AND status = ?`,
+      [
+        agreementStatus.ACTIVATION,
+        stored.storageKey,
+        stored.sha256,
+        user.user_id,
+        fullName,
+        versionId,
+        agreementStatus.SIGNATURE,
+      ],
+    )
+    if (updateResult.affectedRows !== 1) {
+      throw httpError('Agreement status changed before the signature was recorded.', 409)
+    }
+
+    await connection.execute(
+      `INSERT INTO agreement_events
+        (agreement_id, agreement_version_id, action_code, previous_status, new_status,
+         actor_user_id, customer_visible_comment)
+       VALUES (?, ?, 'ELECTRONIC_SIGNATURE_CAPTURED', ?, ?, ?, ?)`,
+      [
+        agreementId,
+        versionId,
+        agreementStatus.SIGNATURE,
+        agreementStatus.ACTIVATION,
+        user.user_id,
+        `Electronically signed by ${fullName}; electronic-signature consent recorded.`,
+      ],
+    )
+    await notifyActiveAdmins(connection, {
+      type: 'AGREEMENT_DIGITALLY_SIGNED',
+      title: `Agreement digitally signed: ${version.agreement_number}`,
+      message: `${fullName} digitally signed the agreement. Review and activate it.`,
+      targetUrl: `/app/admin/agreements/${agreementId}/review`,
+    })
+    await connection.commit()
   } catch (error) {
+    await connection.rollback()
     await removePrivateFile(stored?.absolutePath)
     throw error
   } finally {
-    if (file.path) await removePrivateFile(file.path)
+    connection.release()
   }
+  return getCustomerAgreementDetail(user.user_id, agreementId)
 }
 
 export async function requestCustomerAgreementChanges(user, agreementIdValue, versionIdValue, input) {
@@ -933,7 +976,7 @@ export async function activateSignedAgreement(agreementIdValue, versionIdValue, 
     await connection.beginTransaction()
     const version = await getCurrentVersionForUpdate(connection, agreementId, versionId)
     if (version.status !== agreementStatus.ACTIVATION || !version.signed_document_path) {
-      throw httpError('A customer-signed PDF must be uploaded before activation.', 409)
+      throw httpError('A digitally signed agreement is required before activation.', 409)
     }
     const finalEffectiveDate = effectiveDate ?? new Date().toISOString().slice(0, 10)
     const finalExpiryDate = expiryDate ?? version.expiry_date

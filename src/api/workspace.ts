@@ -308,6 +308,8 @@ export type AgreementDetail = {
     createdAt: string
     reviewedAt: string | null
     signedUploadedAt: string | null
+    customerSignatureName?: string | null
+    customerSignatureMethod?: 'TYPED_NAME' | 'UPLOADED_PDF' | null
     activatedAt: string | null
   } | null
   serviceLines: Array<{
@@ -611,17 +613,19 @@ export const workspaceApi = {
     }
   },
 
-  async uploadSignedAgreement(agreementId: number, versionId: number, file: File) {
+  async signAgreement(
+    agreementId: number,
+    versionId: number,
+    values: { fullName: string; acceptedElectronicSignature: boolean },
+  ) {
     try {
-      const body = new FormData()
-      body.append('signedPdf', file)
       const response = await http.post<AgreementDetail>(
-        `/agreements/customer/${agreementId}/versions/${versionId}/signed-copy`,
-        body,
+        `/agreements/customer/${agreementId}/versions/${versionId}/sign`,
+        values,
       )
       return response.data
     } catch (error) {
-      throw new Error(messageFrom(error, 'Unable to upload the signed agreement.'))
+      throw new Error(messageFrom(error, 'Unable to sign the agreement electronically.'))
     }
   },
 

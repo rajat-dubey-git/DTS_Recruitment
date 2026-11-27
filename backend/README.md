@@ -105,7 +105,9 @@ Open the Vite URL displayed in the terminal.
 The application uses backend-managed authentication.
 
 - Passwords are hashed using bcrypt.
-- JWT access tokens are stored in HttpOnly cookies.
+- 15-minute JWT access tokens and rotating refresh tokens are stored in HttpOnly cookies.
+- Refresh-token hashes, session expiry/revocation timestamps, last activity, IP address, and user agent are stored in `user_sessions`; raw cookie tokens are never stored.
+- A session expires 7 days after sign-in. Signing out revokes it immediately.
 - The backend validates user status and role.
 - Passwords and password hashes must never be exposed to the frontend.
 
@@ -116,6 +118,7 @@ Recruiter and customer-contact invitations use one-time setup links. Configure S
 Current authentication endpoints:
 
 - `POST /api/auth/login`
+- `POST /api/auth/refresh`
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
 

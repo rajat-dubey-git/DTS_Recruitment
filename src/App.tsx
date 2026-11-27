@@ -64,6 +64,7 @@ import OperationalDashboardPage from './pages/OperationalDashboardPage'
 import AdminWorkspacePage from './pages/admin/AdminWorkspacePage'
 import AdminAgreementReviewPage from './pages/admin/AdminAgreementReviewPage'
 import AdminCandidatesPage from './pages/admin/AdminCandidatesPage'
+import AdminCreateInvoicePage from './pages/admin/AdminCreateInvoicePage'
 import AdminInvoicesPage from './pages/admin/AdminInvoicesPage'
 import AdminOffersPage from './pages/admin/AdminOffersPage'
 import CustomerAgreementsPage from './pages/CustomerAgreementsPage'
@@ -112,6 +113,7 @@ export default function App() {
           <Route element={<AdminRoute />}>
             <Route path="/app/admin" element={<Navigate to="/app/admin/customers" replace />} />
             <Route path="/app/admin/candidates" element={<AdminCandidatesPage />} />
+            <Route path="/app/admin/create-invoice" element={<AdminCreateInvoicePage />} />
             <Route path="/app/admin/invoices" element={<AdminInvoicesPage />} />
             <Route path="/app/admin/offers" element={<AdminOffersPage />} />
             <Route path="/app/admin/:module" element={<AdminWorkspacePage />} />

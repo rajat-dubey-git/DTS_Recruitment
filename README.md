@@ -12,7 +12,7 @@ Recruitment operations app with a React/TypeScript frontend, Node.js/Express API
 - Customer requirement form links, submissions, admin review, and conversion to requirements linked to an active job profile and approved service order
 - Admin agreement sample preview rendered by the same PDF generator as customer-specific agreement drafts
 - Admin approval of service orders against active agreements
-- Customer agreement requests, draft and signed PDF workflows, and customer/admin download archives
+- Customer agreement requests, typed-name electronic signing with auditable signed PDFs, and customer/admin download archives
 - Candidate self-service for profile, skills, education, work history, private resumes, open requirements, applications and application history
 - Admin candidate invitations create/link the candidate profile and account transactionally; a valid candidate mobile number is required
 - Recruiter-assigned requirement details, candidate matching, consent-confirmed submissions, application stage updates and interview scheduling
@@ -26,6 +26,8 @@ Customer requirement requests are staged and do not become active recruiting req
 
 Placement invoices are created as `DRAFT` records only for selected candidates. Admins manually enter invoice number, amount, tax and dates from approved terms; issuing the invoice makes it visible to the customer. This does not implement automatic fee calculation or automatic requirement/agreement/invoice number generation.
 
+Any active contact linked to a customer company can sign that company's agreement by entering their full name and affirming electronic-signature consent. The system records the authenticated account, typed name, signature method, timestamp, and generated PDF hash; an administrator must still review and activate the agreement. The current agreement PDF contains placeholder legal terms and requires legal/commercial approval before production use.
+
 ## Prerequisites
 
 - Node.js 20+
@@ -36,7 +38,7 @@ Placement invoices are created as `DRAFT` records only for selected candidates. 
 
 1. Install MySQL 8.0.16+ and connect as a MySQL administrator. On a **new, empty database only**, run `database command and value.txt` once; it creates and seeds `dts_recruitment`. Do not run this seed file against an existing database.
 2. After the seed finishes, replace the password placeholder in `database_shareable_setup.sql` with a unique strong password and run that script as the MySQL administrator. It creates the least-privilege app account for `127.0.0.1`.
-3. Run `database_migration_phase1_to_phase3.sql` as the MySQL administrator. This is the master additive migration for the current setup, including agreement, candidate-consent, document-security, and customer-decision schema. Do not also run `database_additive_migration.sql` or `database_phase2_agreements.sql`; those overlap and are one-time scripts. For an existing installation missing only customer decision history, apply `database_add_customer_candidate_decisions.sql` instead of rerunning the master migration. Back up an existing database before any migration.
+3. Run `database_migration_phase1_to_phase3.sql` as the MySQL administrator. This is the master additive migration for the current setup, including agreement, candidate-consent, document-security, and customer-decision schema. Do not also run `database_additive_migration.sql` or `database_phase2_agreements.sql`; those overlap and are one-time scripts. For an existing installation missing only customer decision history, apply `database_add_customer_candidate_decisions.sql` instead of rerunning the master migration. Existing databases that already applied the master migration before typed-name signing must apply `database_migration_digital_agreement_signature.sql` once. Back up an existing database before any migration.
 4. Run `database_migration_user_deletion_and_invoice_selection.sql` once after the master migration. It adjusts selected foreign keys so user-account removal preserves business records, and it backfills placement records for applications already marked `SELECTED`. Back up the database first; this is an additive, one-time migration.
 5. Run `database_migration_requirement_skills.sql` to add storage for customer-requested skills. The migration is safe to rerun and does nothing if the column already exists.
 6. In `backend`, copy `.env.example` to `.env`. Set `DB_HOST=127.0.0.1`, `DB_USER=dts_app`, and `DB_PASSWORD` to the same unique password used in the setup script. Also set a random JWT secret of at least 32 bytes, a private initial admin password (at least 12 characters; bcrypt accepts at most 72 UTF-8 bytes), and SMTP settings. Never commit `.env`.

@@ -9,6 +9,7 @@ import {
   Building2,
   FileText,
   FileCheck2,
+  FilePlus2,
 } from 'lucide-react'
 
 import type { LucideIcon } from 'lucide-react'
@@ -38,6 +39,7 @@ export const navByRole: Record<Role, NavItem[]> = {
     { label: 'Agreements', icon: FileText, path: '/app/admin/agreements' },
     { label: 'Rate Cards', icon: CreditCard, path: '/app/admin/rate-cards' },
     { label: 'Service Orders', icon: ClipboardList, path: '/app/admin/service-orders' },
+    { label: 'Create Invoice', icon: FilePlus2, path: '/app/admin/create-invoice' },
     { label: 'Invoices', icon: CreditCard, path: '/app/admin/invoices' },
     { label: 'Customer Requests', icon: ClipboardList, path: '/app/admin/requirement-intakes' },
     { label: 'Recruiting Operations', icon: Users, path: '/app/assigned-requirements' },
